@@ -11,6 +11,7 @@ type StateManager interface {
 	SaveClusterState(ctx context.Context, state *ClusterState) error
 	GetClusterState(ctx context.Context, name string) (*ClusterState, error)
 	ListClusters(ctx context.Context) ([]*ClusterState, error)
+	CreateCluster(ctx context.Context, name string, provider string, region string, nodes int) error
 	DeleteClusterState(ctx context.Context, name string) error
 
 	// Resource operations
@@ -51,17 +52,19 @@ type Lock interface {
 
 // ClusterState represents the state of a cluster
 type ClusterState struct {
-	Name      string            `json:"name"`
-	Provider  string            `json:"provider"`
-	Region    string            `json:"region"`
-	Status    string            `json:"status"`
-	NodeCount int               `json:"nodeCount"`
-	Version   string            `json:"version"`
-	CreatedAt time.Time         `json:"createdAt"`
-	UpdatedAt time.Time         `json:"updatedAt"`
-	CreatedBy string            `json:"createdBy"`
-	Metadata  map[string]string `json:"metadata"`
-	Resources []*Resource       `json:"resources"`
+	ID        int         `json:"id"`
+	Name      string      `json:"name"`
+	Provider  string      `json:"provider"`
+	Region    string      `json:"region"`
+	Status    string      `json:"status"`
+	NodeCount int         `json:"nodeCount"`
+	Version   string      `json:"version"`
+	Config    string      `json:"config"`
+	CreatedAt time.Time   `json:"createdAt"`
+	UpdatedAt time.Time   `json:"updatedAt"`
+	CreatedBy string      `json:"createdBy"`
+	Metadata  string      `json:"metadata"`
+	Resources []*Resource `json:"resources"`
 	//Credentials *EncryptedData    `json:"credentials,omitempty"`
 	LastBackup *time.Time `json:"lastBackup,omitempty"`
 }

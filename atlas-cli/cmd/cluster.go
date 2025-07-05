@@ -32,29 +32,10 @@ var clusterCreateCmd = &cobra.Command{
 		region, _ := cmd.Flags().GetString("region")
 		nodeCount, _ := cmd.Flags().GetInt("nodes")
 
-		cluster := map[string]any{
-			"name":     clusterName,
-			"provider": provider,
-			"region":   region,
-			"nodes":    nodeCount,
-			"status":   "creating",
-			"version":  services.GetVersion(),
+		err := services.GetStateManager().CreateCluster(context.Background(), clusterName, provider, region, nodeCount)
+		if err != nil {
+			return fmt.Errorf("error creating cluster: %s", err)
 		}
-
-		if services.GetOutput() == "json" {
-			jsonOutput, err := json.MarshalIndent(cluster, "", "  ")
-			if err != nil {
-				return fmt.Errorf("failed to marshal cluster info: %w", err)
-			}
-			fmt.Println(string(jsonOutput))
-		} else {
-			fmt.Printf("Creating cluster '%s'...\n", clusterName)
-			fmt.Printf("Provider: %s\n", provider)
-			fmt.Printf("Region: %s\n", region)
-			fmt.Printf("Nodes: %d\n", nodeCount)
-			fmt.Printf("Status: %s\n", cluster["status"])
-		}
-
 		services.Log("Cluster creation initiated successfully")
 		return nil
 	},
@@ -75,6 +56,11 @@ var clusterListCmd = &cobra.Command{
 
 		if err != nil {
 			return fmt.Errorf("error listing clusters: %s", err)
+		}
+
+		if len(clusters) == 0 {
+			fmt.Println("No clusters found")
+			return nil
 		}
 
 		if services.GetOutput() == "json" {

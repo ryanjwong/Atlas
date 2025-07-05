@@ -3,16 +3,18 @@ package state
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const sqliteStateSchema string = `
 CREATE TABLE IF NOT EXISTS clusters (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     provider TEXT NOT NULL,
     region TEXT NOT NULL,
-    status TEXT NOT NULL,
     node_count INTEGER NOT NULL DEFAULT 3,
     version TEXT NOT NULL,
     config TEXT NOT NULL,
@@ -125,7 +127,63 @@ func (s *SQLiteStateManager) Health(ctx context.Context) error {
 
 // ListClusters implements StateManager.
 func (s *SQLiteStateManager) ListClusters(ctx context.Context) ([]*ClusterState, error) {
-	panic("unimplemented")
+	query := `
+		SELECT 
+			id, name, provider, region, node_count, version,
+			config, metadata, created_at, updated_at, created_by
+		FROM clusters 
+		ORDER BY created_at DESC`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clusters []*ClusterState
+
+	for rows.Next() {
+		var cluster ClusterState
+		var configJSON, metadataJSON string
+		var createdAt, updatedAt time.Time
+
+		err := rows.Scan(
+			&cluster.ID,
+			&cluster.Name,
+			&cluster.Provider,
+			&cluster.Region,
+			&cluster.NodeCount,
+			&cluster.Version,
+			&configJSON,
+			&metadataJSON,
+			&createdAt,
+			&updatedAt,
+			&cluster.CreatedBy,
+		)
+
+		if err != nil {
+			return nil, err
+		}
+
+		// Parse JSON fields
+		json.Unmarshal([]byte(configJSON), &cluster.Config)
+		json.Unmarshal([]byte(metadataJSON), &cluster.Metadata)
+
+		cluster.CreatedAt = createdAt
+		cluster.UpdatedAt = updatedAt
+
+		clusters = append(clusters, &cluster)
+	}
+
+	return clusters, rows.Err()
+}
+
+// CreateCluster implements StateManager.
+func (s *SQLiteStateManager) CreateCluster(ctx context.Context, name string, provider string, region string, nodes int) error {
+	query := `INSERT INTO clusters (name, provider, region, node_count, version,
+			config, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	_, err := s.db.Exec(query, name, provider, region, nodes, "1", "test", "test")
+	return err
 }
 
 // ListResources implements StateManager.
