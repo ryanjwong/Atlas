@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/providers"
 	"github.com/spf13/cobra"
 )
 
@@ -31,10 +32,22 @@ var clusterCreateCmd = &cobra.Command{
 		provider, _ := cmd.Flags().GetString("provider")
 		region, _ := cmd.Flags().GetString("region")
 		nodeCount, _ := cmd.Flags().GetInt("nodes")
-
-		err := services.GetStateManager().CreateCluster(context.Background(), clusterName, provider, region, nodeCount)
+		var p providers.Provider
+		switch provider {
+		case "local":
+			localProvider := services.GetLocalProvider()
+			p = &localProvider
+		default:
+			return fmt.Errorf("unsupported provider: %s", provider)
+		}
+		
+		_, err := p.CreateCluster(context.Background(), &providers.ClusterConfig{
+			Name:      clusterName,
+			Region:    region,
+			NodeCount: nodeCount,
+		})
 		if err != nil {
-			return fmt.Errorf("error creating cluster: %s", err)
+			return fmt.Errorf("failed to create cluster: %w", err)
 		}
 		services.Log("Cluster creation initiated successfully")
 		return nil
@@ -101,10 +114,17 @@ var clusterDeleteCmd = &cobra.Command{
 		clusterName := args[0]
 		services.Log(fmt.Sprintf("Deleting cluster: %s", clusterName))
 
+		localProvider := services.GetLocalProvider()
+		p := &localProvider
+		err := p.DeleteCluster(context.Background(), clusterName)
+		if err != nil {
+			return fmt.Errorf("failed to delete cluster: %w", err)
+		}
+
 		result := map[string]any{
 			"name":    clusterName,
-			"status":  "deleting",
-			"message": fmt.Sprintf("Cluster '%s' deletion initiated", clusterName),
+			"status":  "deleted",
+			"message": fmt.Sprintf("Cluster '%s' deleted successfully", clusterName),
 		}
 
 		if services.GetOutput() == "json" {
@@ -114,11 +134,10 @@ var clusterDeleteCmd = &cobra.Command{
 			}
 			fmt.Println(string(jsonOutput))
 		} else {
-			fmt.Printf("Deleting cluster '%s'...\n", clusterName)
-			fmt.Printf("Status: %s\n", result["status"])
+			fmt.Printf("Cluster '%s' deleted successfully\n", clusterName)
 		}
 
-		services.Log("Cluster deletion initiated successfully")
+		services.Log("Cluster deletion completed successfully")
 		return nil
 	},
 }
@@ -129,7 +148,7 @@ func init() {
 	clusterCmd.AddCommand(clusterListCmd)
 	clusterCmd.AddCommand(clusterDeleteCmd)
 
-	clusterCreateCmd.Flags().StringP("provider", "p", "aws", "Cloud provider (aws, gcp, azure)")
+	clusterCreateCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
 	clusterCreateCmd.Flags().StringP("region", "r", "us-west-2", "Region to create cluster in")
 	clusterCreateCmd.Flags().IntP("nodes", "n", 3, "Number of nodes in the cluster")
 }
