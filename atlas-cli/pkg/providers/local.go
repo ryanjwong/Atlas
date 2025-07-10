@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -10,6 +11,14 @@ import (
 )
 
 type LocalProvider struct {
+}
+type MinikubeProfilesResponse struct {
+	Invalid []interface{} `json:"invalid"`
+	Valid   []Profile     `json:"valid"`
+}
+
+type Profile struct {
+	Name string `json:"Name"`
 }
 
 func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
@@ -50,15 +59,15 @@ func (l *LocalProvider) StopCluster(ctx context.Context, name string) error {
 
 func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
 	args := []string{"start", "-p", config.Name}
-	
+
 	if config.Version != "" {
 		args = append(args, "--kubernetes-version="+config.Version)
 	}
-	
+
 	if config.NodeCount > 0 {
 		args = append(args, "--nodes="+strconv.Itoa(config.NodeCount))
 	}
-	
+
 	cmd := exec.Command("minikube", args...)
 	fmt.Println("creating minikube cluster...")
 	_, err := cmd.CombinedOutput()
@@ -82,18 +91,16 @@ func (l *LocalProvider) DeleteCluster(ctx context.Context, name string) error {
 func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, error) {
 	cmd := exec.Command("minikube", "status", "-p", name)
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("cluster %s not found: %s", name, err)
-	}
-
 	statusStr := string(output)
 	var status ClusterStatus
-	if strings.Contains(statusStr, "Running") {
-		status = ClusterStatusRunning
-	} else if strings.Contains(statusStr, "Stopped") {
-		status = ClusterStatusStopped
-	} else {
-		status = ClusterStatusError
+	if err != nil {
+		if strings.Contains(statusStr, "Running") {
+			status = ClusterStatusRunning
+		} else if strings.Contains(statusStr, "Stopped") {
+			status = ClusterStatusStopped
+		} else {
+			return nil, fmt.Errorf("cluster %s not found: %s", name, err)
+		}
 	}
 
 	cmd = exec.Command("minikube", "ip", "-p", name)
@@ -105,7 +112,7 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 
 	var version string
 	var nodeCount int = 1
-	
+
 	cmd = exec.Command("minikube", "profile", "list")
 	profileOutput, err := cmd.CombinedOutput()
 	if err == nil {
@@ -166,6 +173,32 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 		UpdatedAt: time.Now(),
 		Tags:      make(map[string]string),
 	}, nil
+}
+
+func (l *LocalProvider) ListClusters(ctx context.Context) ([]*Cluster, error) {
+	cmd := exec.Command("minikube", "profile", "list", "-o=json")
+	var profiles MinikubeProfilesResponse
+
+	profileOutput, err := cmd.CombinedOutput()
+
+	if err != nil {
+		return nil, fmt.Errorf("error getting profiles: %s", err)
+	}
+	if err := json.Unmarshal(profileOutput, &profiles); err != nil {
+		return nil, fmt.Errorf("error unmarshaling profiles: %s", err)
+	}
+
+	var clusters []*Cluster
+
+	for _, profile := range profiles.Valid {
+		cluster, err := l.GetCluster(ctx, profile.Name)
+		if err != nil {
+			return nil, fmt.Errorf("error getting cluster %s: %s", profile.Name, err)
+		}
+		clusters = append(clusters, cluster)
+	}
+
+	return clusters, nil
 }
 
 func (l *LocalProvider) GetProviderName() string {

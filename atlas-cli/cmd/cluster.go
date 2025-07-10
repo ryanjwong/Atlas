@@ -65,7 +65,16 @@ var clusterListCmd = &cobra.Command{
 		}
 
 		services.Log("Listing clusters")
-		clusters, err := services.GetStateManager().ListClusters(context.Background())
+		provider, _ := cmd.Flags().GetString("provider")
+		var p providers.Provider
+		switch provider {
+		case "local":
+			localProvider := services.GetLocalProvider()
+			p = &localProvider
+		default:
+			return fmt.Errorf("unsupported provider: %s", provider)
+		}
+		clusters, err := p.ListClusters(context.Background())
 
 		if err != nil {
 			return fmt.Errorf("error listing clusters: %s", err)
@@ -148,7 +157,9 @@ func init() {
 	clusterCmd.AddCommand(clusterListCmd)
 	clusterCmd.AddCommand(clusterDeleteCmd)
 
-	clusterCreateCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp)")
+	clusterCreateCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
 	clusterCreateCmd.Flags().StringP("region", "r", "us-west-2", "Region to create cluster in")
 	clusterCreateCmd.Flags().IntP("nodes", "n", 1, "Number of nodes in the cluster")
+
+	clusterListCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
 }

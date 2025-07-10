@@ -10,6 +10,7 @@ type Provider interface {
 	// Cluster operations
 	CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error)
 	GetCluster(ctx context.Context, name string) (*Cluster, error)
+	ListClusters(ctx context.Context) ([]*Cluster, error)
 	UpdateCluster(ctx context.Context, name string, config *ClusterConfig) (*Cluster, error)
 	DeleteCluster(ctx context.Context, name string) error
 	ScaleCluster(ctx context.Context, name string, nodeCount int) error
