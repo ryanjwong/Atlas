@@ -74,7 +74,7 @@ func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig
 	if err != nil {
 		return nil, fmt.Errorf("failed to start minikube: %s", err)
 	}
-
+	fmt.Printf("successfully created cluster: %s\n", config.Name)
 	return l.GetCluster(ctx, config.Name)
 }
 
@@ -92,15 +92,16 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 	cmd := exec.Command("minikube", "status", "-p", name)
 	output, err := cmd.CombinedOutput()
 	statusStr := string(output)
+
 	var status ClusterStatus
-	if err != nil {
-		if strings.Contains(statusStr, "Running") {
-			status = ClusterStatusRunning
-		} else if strings.Contains(statusStr, "Stopped") {
-			status = ClusterStatusStopped
-		} else {
-			return nil, fmt.Errorf("cluster %s not found: %s", name, err)
-		}
+	if strings.Contains(statusStr, "Running") {
+		status = ClusterStatusRunning
+	} else if strings.Contains(statusStr, "Stopped") {
+		status = ClusterStatusStopped
+	} else if err != nil {
+		return nil, fmt.Errorf("cluster %s not found: %s", name, err)
+	} else {
+		status = ClusterStatusError
 	}
 
 	cmd = exec.Command("minikube", "ip", "-p", name)
