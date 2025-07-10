@@ -99,7 +99,7 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 	} else if strings.Contains(statusStr, "Stopped") {
 		status = ClusterStatusStopped
 	} else if err != nil {
-		return nil, fmt.Errorf("cluster %s not found: %s", name, err)
+		return nil, fmt.Errorf("failed to fetch cluster %s, check minikube and ensure this profile is not in a error state: %s", name, err)
 	} else {
 		status = ClusterStatusError
 	}
