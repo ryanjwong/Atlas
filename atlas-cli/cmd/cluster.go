@@ -40,7 +40,7 @@ var clusterCreateCmd = &cobra.Command{
 		default:
 			return fmt.Errorf("unsupported provider: %s", provider)
 		}
-		
+
 		_, err := p.CreateCluster(context.Background(), &providers.ClusterConfig{
 			Name:      clusterName,
 			Region:    region,
@@ -148,7 +148,7 @@ func init() {
 	clusterCmd.AddCommand(clusterListCmd)
 	clusterCmd.AddCommand(clusterDeleteCmd)
 
-	clusterCreateCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
+	clusterCreateCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp)")
 	clusterCreateCmd.Flags().StringP("region", "r", "us-west-2", "Region to create cluster in")
-	clusterCreateCmd.Flags().IntP("nodes", "n", 3, "Number of nodes in the cluster")
+	clusterCreateCmd.Flags().IntP("nodes", "n", 1, "Number of nodes in the cluster")
 }
