@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/logsource"
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/providers"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -422,16 +423,30 @@ var clusterHistoryCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Operation History for '%s' (%d operations):\n\n", clusterName, len(operationHistory))
-		fmt.Printf("%-20s %-8s %-10s %-12s\n", "STARTED", "TYPE", "STATUS", "USER")
-		fmt.Printf("%-20s %-8s %-10s %-12s\n", "----", "----", "----", "----")
+		fmt.Printf("%-20s %-8s %-10s %-12s %-12s\n", "STARTED", "TYPE", "STATUS", "USER", "DURATION")
+		fmt.Printf("%-20s %-8s %-10s %-12s %-12s\n", "----", "----", "----", "----", "----")
 
 		for _, op := range operationHistory {
 			started := op.StartedAt.Format("Jan 02 15:04:05")
-			fmt.Printf("%-20s %-8s %-10s %-12s\n",
+			statusColor := getStatusColor(op.OperationStatus)
+			
+			duration := "-"
+			if op.DurationMS != nil {
+				if *op.DurationMS < 1000 {
+					duration = fmt.Sprintf("%.0fms", *op.DurationMS)
+				} else {
+					duration = fmt.Sprintf("%.1fs", *op.DurationMS/1000)
+				}
+			}
+			
+			fmt.Printf("%-20s %-8s %s%-10s%s %-12s %-12s\n",
 				started,
 				string(op.OperationType),
+				statusColor,
 				string(op.OperationStatus),
-				op.UserID)
+				"\033[0m", 
+				truncateString(op.UserID, 12),
+				duration)
 		}
 
 		return nil
@@ -568,6 +583,29 @@ var clusterGenerateConfigCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+func getStatusColor(status logsource.OperationStatus) string {
+	switch status {
+	case logsource.OpStatusCompleted:
+		return "\033[32m"
+	case logsource.OpStatusRunning:
+		return "\033[33m"
+	case logsource.OpStatusFailed:
+		return "\033[31m"
+	default:
+		return "\033[37m"
+	}
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func init() {
