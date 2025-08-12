@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/audit"
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/state"
 )
 
@@ -425,7 +426,9 @@ func TestLocalProvider_WithStateManager(t *testing.T) {
 	}
 	defer stateManager.Disconnect(context.Background())
 
-	provider := NewLocalProvider(stateManager)
+	auditService := audit.NewAuditService(stateManager)
+
+	provider := NewLocalProvider(stateManager, auditService)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -541,7 +544,9 @@ func TestLocalProvider_WithStateManager_NetworkConfig(t *testing.T) {
 	}
 	defer stateManager.Disconnect(context.Background())
 
-	provider := NewLocalProvider(stateManager)
+	auditService := audit.NewAuditService(stateManager)
+
+	provider := NewLocalProvider(stateManager, auditService)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 

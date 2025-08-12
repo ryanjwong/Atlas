@@ -24,13 +24,13 @@ test-with-state:
 	go test -v -timeout $(TIMEOUT) -run StateManager ./...
 
 build:
-	go build -o atlas-cli
+	go build -o atlas
 
 build-race:
-	go build -race -o atlas-cli
+	go build -race -o atlas
 
 clean:
-	rm -f atlas-cli
+	rm -f atlas
 	rm -f *.db
 	rm -f test-*.yaml
 	find . -name "*.db" -delete

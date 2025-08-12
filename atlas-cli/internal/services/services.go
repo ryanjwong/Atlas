@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/audit"
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/providers"
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/state"
 )
@@ -20,9 +21,10 @@ func NewServices(verbose bool, output string, version string, path string) (*Ser
 	if err != nil {
 		return nil, fmt.Errorf("error initializing state manager with path %s: %s", path, err)
 	}
-	
-	localProvider := providers.NewLocalProvider(stateManager)
-	
+	auditService := audit.NewAuditService(stateManager)
+
+	localProvider := providers.NewLocalProvider(stateManager, auditService)
+
 	return &Services{
 		verbose:       verbose,
 		output:        output,

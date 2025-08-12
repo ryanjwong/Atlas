@@ -316,7 +316,7 @@ var clusterScaleCmd = &cobra.Command{
 
 		clusterName := args[0]
 		nodeCount, _ := cmd.Flags().GetInt("nodes")
-		
+
 		services.Log(fmt.Sprintf("Scaling cluster: %s to %d nodes", clusterName, nodeCount))
 
 		p := services.GetLocalProvider()
@@ -374,7 +374,7 @@ var clusterStatusCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("cluster '%s' not found in state database or provider", clusterName)
 			}
-			
+
 			// Display basic cluster info
 			if services.GetOutput() == "json" {
 				jsonOutput, err := json.MarshalIndent(cluster, "", "  ")
@@ -448,12 +448,45 @@ var clusterHistoryCmd = &cobra.Command{
 		}
 
 		clusterName := args[0]
-		
-		// For now, show basic state info
-		// TODO: Implement proper audit trail in next phase
+		stateManager := services.GetStateManager()
+		limit, _ := cmd.Flags().GetInt("limit")
+		operationHistory, err := stateManager.GetOperationHistory(context.Background(), clusterName, limit)
+		if err != nil {
+			return fmt.Errorf("failed to get operation history: %w", err)
+		}
+		if services.GetOutput() == "json" {
+			jsonOutput, err := json.MarshalIndent(operationHistory, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to marshal operation history: %w", err)
+			}
+			fmt.Println(string(jsonOutput))
+			return nil
+		}
+
+		if len(operationHistory) == 0 {
+			fmt.Println("No operations found")
+			return nil
+		}
+
 		fmt.Printf("History for cluster '%s':\n", clusterName)
-		fmt.Printf("Note: Detailed operation history will be available in a future version.\n")
-		fmt.Printf("Use 'atlas-cli cluster status %s' to see current state information.\n", clusterName)
+		fmt.Printf("%-20s %-10s %-12s %-12s %-10s %-s\n", "STARTED", "TYPE", "STATUS", "USER", "DURATION", "ERROR")
+		fmt.Printf("%-20s %-10s %-12s %-12s %-10s %-s\n", "--------------------", "----------", "------------", "------------", "----------", "-----")
+		for _, op := range operationHistory {
+			started := op.StartedAt.Format("2006-01-02 15:04:05")
+			duration := "-"
+			if op.DurationMS != nil {
+				duration = fmt.Sprintf("%fms", *op.DurationMS)
+			}
+			fmt.Printf(
+				"%-20s %-10s %-12s %-12s %-10s %-s\n",
+				started,
+				string(op.OperationType),
+				string(op.OperationStatus),
+				op.UserID,
+				duration,
+				op.ErrorMessage,
+			)
+		}
 
 		return nil
 	},
@@ -609,7 +642,7 @@ func init() {
 	clusterCreateCmd.Flags().StringP("version", "k", "", "Kubernetes version")
 	clusterCreateCmd.Flags().String("instance-type", "", "Instance type for nodes")
 	clusterCreateCmd.Flags().StringP("config", "c", "", "Path to cluster configuration YAML file")
-	
+
 	clusterCreateCmd.Flags().Bool("enable-ingress", false, "Enable ingress controller")
 	clusterCreateCmd.Flags().Bool("enable-load-balancer", false, "Enable load balancer")
 	clusterCreateCmd.Flags().Bool("enable-rbac", false, "Enable RBAC")
@@ -620,11 +653,13 @@ func init() {
 	clusterCreateCmd.Flags().String("memory-limit", "", "Memory limit per node (e.g., '8Gi', '4096Mi')")
 
 	clusterListCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
-	
+
 	clusterScaleCmd.Flags().IntP("nodes", "n", 1, "Number of nodes to scale to")
 	clusterScaleCmd.MarkFlagRequired("nodes")
 
 	clusterGenerateConfigCmd.Flags().StringP("output", "o", "", "Output file path (default: stdout)")
-	
+
 	clusterStatusCmd.Flags().Bool("show-config", false, "Show full cluster configuration")
+
+	clusterHistoryCmd.Flags().IntP("limit", "l", 50, "Number of audit logs to display")
 }

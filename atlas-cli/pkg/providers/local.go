@@ -5,23 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"os/user"
 	"strconv"
 	"strings"
 	"time"
-	"os/user"
 
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/audit"
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/state"
 )
 
 type LocalProvider struct {
 	stateManager state.StateManager
+	auditService audit.AuditService
 }
 
-func NewLocalProvider(stateManager state.StateManager) *LocalProvider {
+func NewLocalProvider(stateManager state.StateManager, auditService audit.AuditService) *LocalProvider {
 	return &LocalProvider{
 		stateManager: stateManager,
+		auditService: auditService,
 	}
 }
+
 type MinikubeProfilesResponse struct {
 	Invalid []interface{} `json:"invalid"`
 	Valid   []Profile     `json:"valid"`
@@ -32,7 +36,6 @@ type Profile struct {
 }
 
 func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
-	// Update state to starting
 	if l.stateManager != nil {
 		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
 			clusterState.Status = "starting"
@@ -41,10 +44,25 @@ func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
 		}
 	}
 
+	if l.auditService != nil {
+		opCtx, err := l.auditService.StartOperation(ctx, name, state.OpTypeStart, nil)
+		if err != nil {
+			return fmt.Errorf("failed to start audit operation: %w", err)
+		}
+		defer func() {
+			if opCtx != nil {
+				if err != nil {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
+				} else {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
+				}
+			}
+		}()
+	}
+
 	cmd := exec.Command("minikube", "start", "-p", name)
 	_, err := cmd.CombinedOutput()
 	if err != nil {
-		// Update state to error if start failed
 		if l.stateManager != nil {
 			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, name); stateErr == nil && clusterState != nil {
 				clusterState.Status = "error"
@@ -55,7 +73,6 @@ func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
 		return fmt.Errorf("failed to start cluster %s: %s", name, err)
 	}
 
-	// Update state to running
 	if l.stateManager != nil {
 		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
 			clusterState.Status = "running"
@@ -68,7 +85,6 @@ func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
 }
 
 func (l *LocalProvider) StopCluster(ctx context.Context, name string) error {
-	// Update state to stopping
 	if l.stateManager != nil {
 		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
 			clusterState.Status = "stopping"
@@ -77,10 +93,25 @@ func (l *LocalProvider) StopCluster(ctx context.Context, name string) error {
 		}
 	}
 
+	if l.auditService != nil {
+		opCtx, err := l.auditService.StartOperation(ctx, name, state.OpTypeStop, nil)
+		if err != nil {
+			return fmt.Errorf("failed to start audit operation: %w", err)
+		}
+		defer func() {
+			if opCtx != nil {
+				if err != nil {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
+				} else {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
+				}
+			}
+		}()
+	}
+
 	cmd := exec.Command("minikube", "stop", "-p", name)
 	_, err := cmd.CombinedOutput()
 	if err != nil {
-		// Update state to error if stop failed
 		if l.stateManager != nil {
 			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, name); stateErr == nil && clusterState != nil {
 				clusterState.Status = "error"
@@ -91,7 +122,6 @@ func (l *LocalProvider) StopCluster(ctx context.Context, name string) error {
 		return fmt.Errorf("failed to stop cluster %s: %s", name, err)
 	}
 
-	// Update state to stopped
 	if l.stateManager != nil {
 		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
 			clusterState.Status = "stopped"
@@ -104,15 +134,12 @@ func (l *LocalProvider) StopCluster(ctx context.Context, name string) error {
 }
 
 func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
-	// Save initial cluster state
 	if l.stateManager != nil {
 		currentUser, _ := user.Current()
 		username := "atlas-cli"
 		if currentUser != nil {
 			username = currentUser.Username
 		}
-
-		// Convert ClusterConfig to state format
 		configMap := make(map[string]interface{})
 		configJSON, _ := json.Marshal(config)
 		json.Unmarshal(configJSON, &configMap)
@@ -137,6 +164,26 @@ func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig
 		if err := l.stateManager.SaveClusterState(ctx, clusterState); err != nil {
 			return nil, fmt.Errorf("failed to save cluster state: %w", err)
 		}
+	}
+
+	if l.auditService != nil {
+		var configMap map[string]interface{}
+		configJSON, _ := json.Marshal(config)
+		json.Unmarshal(configJSON, &configMap)
+
+		opCtx, err := l.auditService.StartOperation(ctx, config.Name, state.OpTypeCreate, configMap)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start audit operation: %w", err)
+		}
+		defer func() {
+			if opCtx != nil {
+				if err != nil {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
+				} else {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
+				}
+			}
+		}()
 	}
 
 	args := []string{"start", "-p", config.Name}
@@ -191,7 +238,6 @@ func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig
 	fmt.Println("creating minikube cluster...")
 	_, err := cmd.CombinedOutput()
 	if err != nil {
-		// Update cluster state to failed
 		if l.stateManager != nil {
 			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, config.Name); stateErr == nil && clusterState != nil {
 				clusterState.Status = "failed"
@@ -206,7 +252,6 @@ func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig
 		fmt.Printf("warning: failed to apply some post-create configurations: %v\n", err)
 	}
 
-	// Update cluster state to running
 	if l.stateManager != nil {
 		if clusterState, err := l.stateManager.GetClusterState(ctx, config.Name); err == nil && clusterState != nil {
 			clusterState.Status = "running"
@@ -220,7 +265,6 @@ func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig
 }
 
 func (l *LocalProvider) DeleteCluster(ctx context.Context, name string) error {
-	// Update state to deleting
 	if l.stateManager != nil {
 		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
 			clusterState.Status = "deleting"
@@ -229,10 +273,25 @@ func (l *LocalProvider) DeleteCluster(ctx context.Context, name string) error {
 		}
 	}
 
+	if l.auditService != nil {
+		opCtx, err := l.auditService.StartOperation(ctx, name, state.OpTypeDelete, nil)
+		if err != nil {
+			return fmt.Errorf("failed to start audit operation: %w", err)
+		}
+		defer func() {
+			if opCtx != nil {
+				if err != nil {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
+				} else {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
+				}
+			}
+		}()
+	}
+
 	cmd := exec.Command("minikube", "delete", "-p", name)
 	_, err := cmd.CombinedOutput()
 	if err != nil {
-		// Update state back to previous status if deletion failed
 		if l.stateManager != nil {
 			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, name); stateErr == nil && clusterState != nil {
 				clusterState.Status = "error"
@@ -400,6 +459,22 @@ func (l *LocalProvider) ScaleCluster(ctx context.Context, name string, nodeCount
 
 	if currentCluster.NodeCount == nodeCount {
 		return nil
+	}
+
+	if l.auditService != nil {
+		opCtx, err := l.auditService.StartOperation(ctx, name, state.OpTypeScale, nil)
+		if err != nil {
+			return fmt.Errorf("failed to start audit operation: %w", err)
+		}
+		defer func() {
+			if opCtx != nil {
+				if err != nil {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
+				} else {
+					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
+				}
+			}
+		}()
 	}
 
 	if nodeCount > currentCluster.NodeCount {
@@ -784,7 +859,7 @@ spec:
     requests.storage: "%s"
     persistentvolumeclaims: "%d"
     pods: "%d"
-`, 
+`,
 			resConfig.Quotas.DefaultQuota.CPU,
 			resConfig.Quotas.DefaultQuota.Memory,
 			resConfig.Quotas.DefaultQuota.Storage,

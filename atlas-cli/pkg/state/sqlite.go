@@ -51,10 +51,29 @@ CREATE TABLE IF NOT EXISTS state_locks (
     metadata TEXT
 );
 
+CREATE TABLE IF NOT EXISTS operation_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cluster_name TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    operation_status TEXT NOT NULL,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    duration_ms INTEGER,
+    user_id TEXT NOT NULL,
+    operation_details TEXT,
+    error_message TEXT,
+    metadata TEXT,
+    FOREIGN KEY (cluster_name) REFERENCES clusters(name) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_clusters_name ON clusters(name);
 CREATE INDEX IF NOT EXISTS idx_clusters_provider ON clusters(provider);
 CREATE INDEX IF NOT EXISTS idx_resources_cluster_id ON cluster_resources(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_locks_expires_at ON state_locks(expires_at);
+CREATE INDEX IF NOT EXISTS idx_operation_history_cluster ON operation_history(cluster_name);
+CREATE INDEX IF NOT EXISTS idx_operation_history_type ON operation_history(operation_type);
+CREATE INDEX IF NOT EXISTS idx_operation_history_status ON operation_history(operation_status);
+CREATE INDEX IF NOT EXISTS idx_operation_history_time ON operation_history(started_at);
 `
 
 type SQLiteStateManager struct {
@@ -173,12 +192,11 @@ func (s *SQLiteStateManager) GetClusterState(ctx context.Context, name string) (
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, nil // Cluster not found
+			return nil, nil
 		}
 		return nil, err
 	}
 
-	// Parse JSON fields
 	if err := json.Unmarshal([]byte(configJSON), &cluster.Config); err != nil {
 		cluster.Config = make(map[string]interface{})
 	}
@@ -189,7 +207,6 @@ func (s *SQLiteStateManager) GetClusterState(ctx context.Context, name string) (
 	cluster.CreatedAt = createdAt
 	cluster.UpdatedAt = updatedAt
 
-	// Load resources for this cluster
 	resources, err := s.ListResources(ctx, name)
 	if err != nil {
 		return nil, err
@@ -228,7 +245,7 @@ func (s *SQLiteStateManager) GetResource(ctx context.Context, clusterName string
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, nil // Resource not found
+			return nil, nil
 		}
 		return nil, err
 	}
@@ -237,7 +254,6 @@ func (s *SQLiteStateManager) GetResource(ctx context.Context, clusterName string
 	resource.CreatedAt = createdAt
 	resource.UpdatedAt = updatedAt
 
-	// Parse JSON fields
 	if configJSON.Valid {
 		if err := json.Unmarshal([]byte(configJSON.String), &resource.Config); err != nil {
 			resource.Config = make(map[string]any)
@@ -480,7 +496,7 @@ func (s *SQLiteStateManager) Validate(ctx context.Context) error {
 	}
 
 	// Verify table structure exists
-	tables := []string{"clusters", "cluster_resources", "state_locks"}
+	tables := []string{"clusters", "cluster_resources", "state_locks", "operation_history"}
 	for _, table := range tables {
 		query := `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
 		var name string
@@ -493,6 +509,192 @@ func (s *SQLiteStateManager) Validate(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// StartOperation implements StateManager.
+func (s *SQLiteStateManager) StartOperation(ctx context.Context, op *OperationHistory) error {
+	detailsJSON, err := json.Marshal(op.OperationDetails)
+	if err != nil {
+		return err
+	}
+
+	metadataJSON, err := json.Marshal(op.Metadata)
+	if err != nil {
+		return err
+	}
+
+	query := `
+		INSERT INTO operation_history 
+		(cluster_name, operation_type, operation_status, user_id, operation_details, metadata)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`
+	result, err := s.db.ExecContext(ctx, query,
+		op.ClusterName, string(op.OperationType), string(op.OperationStatus),
+		op.UserID, string(detailsJSON), string(metadataJSON))
+	if err != nil {
+		return err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	op.ID = int(id)
+
+	return nil
+}
+
+// UpdateOperation implements StateManager.
+func (s *SQLiteStateManager) UpdateOperation(ctx context.Context, id int, status OperationStatus, errorMsg string) error {
+	query := `
+		UPDATE operation_history 
+		SET operation_status = ?, error_message = ?
+		WHERE id = ?
+	`
+	_, err := s.db.ExecContext(ctx, query, string(status), errorMsg, id)
+	return err
+}
+
+// CompleteOperation implements StateManager.
+func (s *SQLiteStateManager) CompleteOperation(ctx context.Context, id int, status OperationStatus) error {
+	query := `
+		UPDATE operation_history 
+		SET operation_status = ?, completed_at = CURRENT_TIMESTAMP,
+			duration_ms = (julianday('now') - julianday(started_at)) * 24 * 60 * 60 * 1000
+		WHERE id = ?
+	`
+	_, err := s.db.ExecContext(ctx, query, string(status), id)
+	return err
+}
+
+// GetOperationHistory implements StateManager.
+func (s *SQLiteStateManager) GetOperationHistory(ctx context.Context, clusterName string, limit int) ([]*OperationHistory, error) {
+	query := `
+		SELECT id, cluster_name, operation_type, operation_status, started_at, completed_at,
+			   duration_ms, user_id, operation_details, error_message, metadata
+		FROM operation_history 
+		WHERE cluster_name = ?
+		ORDER BY started_at DESC
+		LIMIT ?
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, clusterName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var operations []*OperationHistory
+
+	for rows.Next() {
+		var op OperationHistory
+		var detailsJSON, metadataJSON sql.NullString
+		var completedAt sql.NullTime
+		var durationMS sql.NullFloat64
+		var startedAt time.Time
+		var errorMessage sql.NullString
+		var opType, opStatus string
+
+		err := rows.Scan(
+			&op.ID, &op.ClusterName, &opType, &opStatus, &startedAt, &completedAt,
+			&durationMS, &op.UserID, &detailsJSON, &errorMessage, &metadataJSON,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		op.OperationType = OperationType(opType)
+		op.OperationStatus = OperationStatus(opStatus)
+		op.StartedAt = startedAt
+
+		if completedAt.Valid {
+			op.CompletedAt = &completedAt.Time
+		}
+		if durationMS.Valid {
+			op.DurationMS = &durationMS.Float64
+		}
+
+		if detailsJSON.Valid && detailsJSON.String != "" {
+			if err := json.Unmarshal([]byte(detailsJSON.String), &op.OperationDetails); err != nil {
+				op.OperationDetails = make(map[string]interface{})
+			}
+		} else {
+			op.OperationDetails = make(map[string]interface{})
+		}
+
+		if errorMessage.Valid {
+			op.ErrorMessage = errorMessage.String
+		}
+
+		if metadataJSON.Valid && metadataJSON.String != "" {
+			if err := json.Unmarshal([]byte(metadataJSON.String), &op.Metadata); err != nil {
+				op.Metadata = make(map[string]string)
+			}
+		} else {
+			op.Metadata = make(map[string]string)
+		}
+
+		operations = append(operations, &op)
+	}
+
+	return operations, rows.Err()
+}
+
+// GetOperation implements StateManager.
+func (s *SQLiteStateManager) GetOperation(ctx context.Context, id int) (*OperationHistory, error) {
+	query := `
+		SELECT id, cluster_name, operation_type, operation_status, started_at, completed_at,
+			   duration_ms, user_id, operation_details, error_message, metadata
+		FROM operation_history 
+		WHERE id = ?
+	`
+
+	var op OperationHistory
+	var detailsJSON, metadataJSON sql.NullString
+	var completedAt sql.NullTime
+	var durationMS sql.NullFloat64
+	var startedAt time.Time
+	var opType, opStatus string
+
+	err := s.db.QueryRowContext(ctx, query, id).Scan(
+		&op.ID, &op.ClusterName, &opType, &opStatus, &startedAt, &completedAt,
+		&durationMS, &op.UserID, &detailsJSON, &op.ErrorMessage, &metadataJSON,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	op.OperationType = OperationType(opType)
+	op.OperationStatus = OperationStatus(opStatus)
+	op.StartedAt = startedAt
+
+	if completedAt.Valid {
+		op.CompletedAt = &completedAt.Time
+	}
+	if durationMS.Valid {
+		op.DurationMS = &durationMS.Float64
+	}
+
+	if detailsJSON.Valid && detailsJSON.String != "" {
+		if err := json.Unmarshal([]byte(detailsJSON.String), &op.OperationDetails); err != nil {
+			op.OperationDetails = make(map[string]interface{})
+		}
+	} else {
+		op.OperationDetails = make(map[string]interface{})
+	}
+
+	if metadataJSON.Valid && metadataJSON.String != "" {
+		if err := json.Unmarshal([]byte(metadataJSON.String), &op.Metadata); err != nil {
+			op.Metadata = make(map[string]string)
+		}
+	} else {
+		op.Metadata = make(map[string]string)
+	}
+
+	return &op, nil
 }
 
 var _ StateManager = (*SQLiteStateManager)(nil)

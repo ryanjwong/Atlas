@@ -24,6 +24,13 @@ type StateManager interface {
 	AcquireLock(ctx context.Context, resource string, timeout time.Duration) (Lock, error)
 	ReleaseLock(ctx context.Context, lock Lock) error
 
+	// Operation History
+	StartOperation(ctx context.Context, op *OperationHistory) error
+	UpdateOperation(ctx context.Context, id int, status OperationStatus, errorMsg string) error
+	CompleteOperation(ctx context.Context, id int, status OperationStatus) error
+	GetOperationHistory(ctx context.Context, clusterName string, limit int) ([]*OperationHistory, error)
+	GetOperation(ctx context.Context, id int) (*OperationHistory, error)
+
 	// Backup operations
 	// CreateBackup(ctx context.Context) (*Backup, error)
 	// RestoreBackup(ctx context.Context, backupID string) error
@@ -81,3 +88,39 @@ type Resource struct {
 	UpdatedAt    time.Time      `json:"updatedAt"`
 	Dependencies []string       `json:"dependencies,omitempty"`
 }
+
+// OperationHistory represents a cluster operation record
+type OperationHistory struct {
+	ID               int                    `json:"id"`
+	ClusterName      string                 `json:"cluster_name"`
+	OperationType    OperationType          `json:"operation_type"`
+	OperationStatus  OperationStatus        `json:"operation_status"`
+	StartedAt        time.Time              `json:"started_at"`
+	CompletedAt      *time.Time             `json:"completed_at,omitempty"`
+	DurationMS       *float64               `json:"duration_ms,omitempty"`
+	UserID           string                 `json:"user_id"`
+	OperationDetails map[string]interface{} `json:"operation_details,omitempty"`
+	ErrorMessage     string                 `json:"error_message,omitempty"`
+	Metadata         map[string]string      `json:"metadata,omitempty"`
+}
+
+type OperationType string
+
+const (
+	OpTypeCreate OperationType = "create"
+	OpTypeStart  OperationType = "start"
+	OpTypeStop   OperationType = "stop"
+	OpTypeDelete OperationType = "delete"
+	OpTypeScale  OperationType = "scale"
+	OpTypeUpdate OperationType = "update"
+)
+
+type OperationStatus string
+
+const (
+	OpStatusStarted   OperationStatus = "started"
+	OpStatusRunning   OperationStatus = "running"
+	OpStatusCompleted OperationStatus = "completed"
+	OpStatusFailed    OperationStatus = "failed"
+	OpStatusCanceled  OperationStatus = "canceled"
+)
