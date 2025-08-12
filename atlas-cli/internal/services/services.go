@@ -12,7 +12,7 @@ type Services struct {
 	output        string
 	version       string
 	stateManager  state.StateManager
-	localProvider providers.LocalProvider
+	localProvider *providers.LocalProvider
 }
 
 func NewServices(verbose bool, output string, version string, path string) (*Services, error) {
@@ -20,12 +20,15 @@ func NewServices(verbose bool, output string, version string, path string) (*Ser
 	if err != nil {
 		return nil, fmt.Errorf("error initializing state manager with path %s: %s", path, err)
 	}
+	
+	localProvider := providers.NewLocalProvider(stateManager)
+	
 	return &Services{
 		verbose:       verbose,
 		output:        output,
 		version:       version,
 		stateManager:  stateManager,
-		localProvider: providers.LocalProvider{},
+		localProvider: localProvider,
 	}, nil
 }
 
@@ -51,6 +54,6 @@ func (s *Services) GetStateManager() state.StateManager {
 	return s.stateManager
 }
 
-func (s *Services) GetLocalProvider() providers.LocalProvider {
+func (s *Services) GetLocalProvider() *providers.LocalProvider {
 	return s.localProvider
 }

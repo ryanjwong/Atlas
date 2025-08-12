@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS clusters (
     name TEXT UNIQUE NOT NULL,
     provider TEXT NOT NULL,
     region TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unknown',
     node_count INTEGER NOT NULL DEFAULT 3,
     version TEXT NOT NULL,
     config TEXT NOT NULL,
@@ -92,44 +94,179 @@ func (s *SQLiteStateManager) Cleanup(ctx context.Context, olderThan time.Duratio
 
 // Connect implements StateManager.
 func (s *SQLiteStateManager) Connect(ctx context.Context) error {
-	panic("unimplemented")
+	return s.db.PingContext(ctx)
 }
 
 // DeleteClusterState implements StateManager.
 func (s *SQLiteStateManager) DeleteClusterState(ctx context.Context, name string) error {
-	panic("unimplemented")
+	query := `DELETE FROM clusters WHERE name = ?`
+	result, err := s.db.ExecContext(ctx, query, name)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return sql.ErrNoRows // Cluster not found
+	}
+
+	return nil
 }
 
 // DeleteResource implements StateManager.
 func (s *SQLiteStateManager) DeleteResource(ctx context.Context, clusterName string, resourceID string) error {
-	panic("unimplemented")
+	query := `DELETE FROM cluster_resources WHERE cluster_id = ? AND id = ?`
+	result, err := s.db.ExecContext(ctx, query, clusterName, resourceID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
 }
 
 // Disconnect implements StateManager.
 func (s *SQLiteStateManager) Disconnect(ctx context.Context) error {
-	panic("unimplemented")
+	return s.db.Close()
 }
 
 // GetClusterState implements StateManager.
 func (s *SQLiteStateManager) GetClusterState(ctx context.Context, name string) (*ClusterState, error) {
-	panic("unimplemented")
+	query := `
+		SELECT 
+			id, name, provider, region, status, node_count, version,
+			config, metadata, created_at, updated_at, created_by
+		FROM clusters 
+		WHERE name = ?
+	`
+
+	var cluster ClusterState
+	var configJSON, metadataJSON string
+	var createdAt, updatedAt time.Time
+
+	err := s.db.QueryRowContext(ctx, query, name).Scan(
+		&cluster.ID,
+		&cluster.Name,
+		&cluster.Provider,
+		&cluster.Region,
+		&cluster.Status,
+		&cluster.NodeCount,
+		&cluster.Version,
+		&configJSON,
+		&metadataJSON,
+		&createdAt,
+		&updatedAt,
+		&cluster.CreatedBy,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // Cluster not found
+		}
+		return nil, err
+	}
+
+	// Parse JSON fields
+	if err := json.Unmarshal([]byte(configJSON), &cluster.Config); err != nil {
+		cluster.Config = make(map[string]interface{})
+	}
+	if err := json.Unmarshal([]byte(metadataJSON), &cluster.Metadata); err != nil {
+		cluster.Metadata = make(map[string]string)
+	}
+
+	cluster.CreatedAt = createdAt
+	cluster.UpdatedAt = updatedAt
+
+	// Load resources for this cluster
+	resources, err := s.ListResources(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	cluster.Resources = resources
+
+	return &cluster, nil
 }
 
 // GetResource implements StateManager.
 func (s *SQLiteStateManager) GetResource(ctx context.Context, clusterName string, resourceID string) (*Resource, error) {
-	panic("unimplemented")
+	query := `
+		SELECT id, cluster_id, resource_type, resource_name, namespace, status,
+			   config, dependencies, created_at, updated_at
+		FROM cluster_resources 
+		WHERE cluster_id = ? AND id = ?
+	`
+
+	var resource Resource
+	var configJSON, dependenciesJSON sql.NullString
+	var namespace sql.NullString
+	var createdAt, updatedAt time.Time
+
+	err := s.db.QueryRowContext(ctx, query, clusterName, resourceID).Scan(
+		&resource.ID,
+		&resource.ClusterName,
+		&resource.Type,
+		&resource.Name,
+		&namespace,
+		&resource.Status,
+		&configJSON,
+		&dependenciesJSON,
+		&createdAt,
+		&updatedAt,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // Resource not found
+		}
+		return nil, err
+	}
+
+	resource.Namespace = namespace.String
+	resource.CreatedAt = createdAt
+	resource.UpdatedAt = updatedAt
+
+	// Parse JSON fields
+	if configJSON.Valid {
+		if err := json.Unmarshal([]byte(configJSON.String), &resource.Config); err != nil {
+			resource.Config = make(map[string]any)
+		}
+	} else {
+		resource.Config = make(map[string]any)
+	}
+
+	if dependenciesJSON.Valid {
+		if err := json.Unmarshal([]byte(dependenciesJSON.String), &resource.Dependencies); err != nil {
+			resource.Dependencies = []string{}
+		}
+	} else {
+		resource.Dependencies = []string{}
+	}
+
+	return &resource, nil
 }
 
 // Health implements StateManager.
 func (s *SQLiteStateManager) Health(ctx context.Context) error {
-	panic("unimplemented")
+	return s.db.PingContext(ctx)
 }
 
 // ListClusters implements StateManager.
 func (s *SQLiteStateManager) ListClusters(ctx context.Context) ([]*ClusterState, error) {
 	query := `
 		SELECT 
-			id, name, provider, region, node_count, version,
+			id, name, provider, region, status, node_count, version,
 			config, metadata, created_at, updated_at, created_by
 		FROM clusters 
 		ORDER BY created_at DESC`
@@ -152,6 +289,7 @@ func (s *SQLiteStateManager) ListClusters(ctx context.Context) ([]*ClusterState,
 			&cluster.Name,
 			&cluster.Provider,
 			&cluster.Region,
+			&cluster.Status,
 			&cluster.NodeCount,
 			&cluster.Version,
 			&configJSON,
@@ -165,7 +303,6 @@ func (s *SQLiteStateManager) ListClusters(ctx context.Context) ([]*ClusterState,
 			return nil, err
 		}
 
-		// Parse JSON fields
 		json.Unmarshal([]byte(configJSON), &cluster.Config)
 		json.Unmarshal([]byte(metadataJSON), &cluster.Metadata)
 
@@ -188,7 +325,69 @@ func (s *SQLiteStateManager) CreateCluster(ctx context.Context, name string, pro
 
 // ListResources implements StateManager.
 func (s *SQLiteStateManager) ListResources(ctx context.Context, clusterName string) ([]*Resource, error) {
-	panic("unimplemented")
+	query := `
+		SELECT id, cluster_id, resource_type, resource_name, namespace, status,
+			   config, dependencies, created_at, updated_at
+		FROM cluster_resources 
+		WHERE cluster_id = ?
+		ORDER BY created_at ASC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, clusterName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var resources []*Resource
+
+	for rows.Next() {
+		var resource Resource
+		var configJSON, dependenciesJSON sql.NullString
+		var namespace sql.NullString
+		var createdAt, updatedAt time.Time
+
+		err := rows.Scan(
+			&resource.ID,
+			&resource.ClusterName,
+			&resource.Type,
+			&resource.Name,
+			&namespace,
+			&resource.Status,
+			&configJSON,
+			&dependenciesJSON,
+			&createdAt,
+			&updatedAt,
+		)
+
+		if err != nil {
+			return nil, err
+		}
+
+		resource.Namespace = namespace.String
+		resource.CreatedAt = createdAt
+		resource.UpdatedAt = updatedAt
+
+		if configJSON.Valid {
+			if err := json.Unmarshal([]byte(configJSON.String), &resource.Config); err != nil {
+				resource.Config = make(map[string]any)
+			}
+		} else {
+			resource.Config = make(map[string]any)
+		}
+
+		if dependenciesJSON.Valid {
+			if err := json.Unmarshal([]byte(dependenciesJSON.String), &resource.Dependencies); err != nil {
+				resource.Dependencies = []string{}
+			}
+		} else {
+			resource.Dependencies = []string{}
+		}
+
+		resources = append(resources, &resource)
+	}
+
+	return resources, rows.Err()
 }
 
 // Migrate implements StateManager.
@@ -203,17 +402,97 @@ func (s *SQLiteStateManager) ReleaseLock(ctx context.Context, lock Lock) error {
 
 // SaveClusterState implements StateManager.
 func (s *SQLiteStateManager) SaveClusterState(ctx context.Context, state *ClusterState) error {
-	panic("unimplemented")
+	configJSON, err := json.Marshal(state.Config)
+	if err != nil {
+		return err
+	}
+
+	metadataJSON, err := json.Marshal(state.Metadata)
+	if err != nil {
+		return err
+	}
+
+	if state.ID == 0 {
+		query := `
+			INSERT INTO clusters (name, provider, region, status, node_count, version, config, metadata, created_by)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`
+		result, err := s.db.ExecContext(ctx, query,
+			state.Name, state.Provider, state.Region, state.Status, state.NodeCount, state.Version,
+			string(configJSON), string(metadataJSON), state.CreatedBy)
+		if err != nil {
+			return err
+		}
+
+		id, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		state.ID = int(id)
+	} else {
+		query := `
+			UPDATE clusters 
+			SET provider = ?, region = ?, status = ?, node_count = ?, version = ?, config = ?, 
+				metadata = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`
+		_, err := s.db.ExecContext(ctx, query,
+			state.Provider, state.Region, state.Status, state.NodeCount, state.Version,
+			string(configJSON), string(metadataJSON), state.ID)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // SaveResource implements StateManager.
 func (s *SQLiteStateManager) SaveResource(ctx context.Context, resource *Resource) error {
-	panic("unimplemented")
+	configJSON, err := json.Marshal(resource.Config)
+	if err != nil {
+		return err
+	}
+
+	dependenciesJSON, err := json.Marshal(resource.Dependencies)
+	if err != nil {
+		return err
+	}
+
+	query := `
+		INSERT OR REPLACE INTO cluster_resources 
+		(id, cluster_id, resource_type, resource_name, namespace, status, config, dependencies, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`
+
+	_, err = s.db.ExecContext(ctx, query,
+		resource.ID, resource.ClusterName, resource.Type, resource.Name,
+		resource.Namespace, resource.Status, string(configJSON), string(dependenciesJSON))
+
+	return err
 }
 
 // Validate implements StateManager.
 func (s *SQLiteStateManager) Validate(ctx context.Context) error {
-	panic("unimplemented")
+	// Check database connection
+	if err := s.Health(ctx); err != nil {
+		return err
+	}
+
+	// Verify table structure exists
+	tables := []string{"clusters", "cluster_resources", "state_locks"}
+	for _, table := range tables {
+		query := `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
+		var name string
+		if err := s.db.QueryRowContext(ctx, query, table).Scan(&name); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("table %s does not exist", table)
+			}
+			return err
+		}
+	}
+
+	return nil
 }
 
 var _ StateManager = (*SQLiteStateManager)(nil)

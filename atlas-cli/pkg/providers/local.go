@@ -8,9 +8,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"os/user"
+
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/state"
 )
 
 type LocalProvider struct {
+	stateManager state.StateManager
+}
+
+func NewLocalProvider(stateManager state.StateManager) *LocalProvider {
+	return &LocalProvider{
+		stateManager: stateManager,
+	}
 }
 type MinikubeProfilesResponse struct {
 	Invalid []interface{} `json:"invalid"`
@@ -22,26 +32,113 @@ type Profile struct {
 }
 
 func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
+	// Update state to starting
+	if l.stateManager != nil {
+		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
+			clusterState.Status = "starting"
+			clusterState.UpdatedAt = time.Now()
+			l.stateManager.SaveClusterState(ctx, clusterState)
+		}
+	}
+
 	cmd := exec.Command("minikube", "start", "-p", name)
 	_, err := cmd.CombinedOutput()
 	if err != nil {
+		// Update state to error if start failed
+		if l.stateManager != nil {
+			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, name); stateErr == nil && clusterState != nil {
+				clusterState.Status = "error"
+				clusterState.UpdatedAt = time.Now()
+				l.stateManager.SaveClusterState(ctx, clusterState)
+			}
+		}
 		return fmt.Errorf("failed to start cluster %s: %s", name, err)
+	}
+
+	// Update state to running
+	if l.stateManager != nil {
+		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
+			clusterState.Status = "running"
+			clusterState.UpdatedAt = time.Now()
+			l.stateManager.SaveClusterState(ctx, clusterState)
+		}
 	}
 
 	return nil
 }
 
 func (l *LocalProvider) StopCluster(ctx context.Context, name string) error {
+	// Update state to stopping
+	if l.stateManager != nil {
+		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
+			clusterState.Status = "stopping"
+			clusterState.UpdatedAt = time.Now()
+			l.stateManager.SaveClusterState(ctx, clusterState)
+		}
+	}
+
 	cmd := exec.Command("minikube", "stop", "-p", name)
 	_, err := cmd.CombinedOutput()
 	if err != nil {
+		// Update state to error if stop failed
+		if l.stateManager != nil {
+			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, name); stateErr == nil && clusterState != nil {
+				clusterState.Status = "error"
+				clusterState.UpdatedAt = time.Now()
+				l.stateManager.SaveClusterState(ctx, clusterState)
+			}
+		}
 		return fmt.Errorf("failed to stop cluster %s: %s", name, err)
+	}
+
+	// Update state to stopped
+	if l.stateManager != nil {
+		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
+			clusterState.Status = "stopped"
+			clusterState.UpdatedAt = time.Now()
+			l.stateManager.SaveClusterState(ctx, clusterState)
+		}
 	}
 
 	return nil
 }
 
 func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
+	// Save initial cluster state
+	if l.stateManager != nil {
+		currentUser, _ := user.Current()
+		username := "atlas-cli"
+		if currentUser != nil {
+			username = currentUser.Username
+		}
+
+		// Convert ClusterConfig to state format
+		configMap := make(map[string]interface{})
+		configJSON, _ := json.Marshal(config)
+		json.Unmarshal(configJSON, &configMap)
+
+		clusterState := &state.ClusterState{
+			Name:      config.Name,
+			Provider:  "local",
+			Region:    config.Region,
+			NodeCount: config.NodeCount,
+			Version:   config.Version,
+			Status:    "creating",
+			Config:    configMap,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			CreatedBy: username,
+			Metadata: map[string]string{
+				"minikube_profile": config.Name,
+				"creation_method":  "atlas-cli",
+			},
+		}
+
+		if err := l.stateManager.SaveClusterState(ctx, clusterState); err != nil {
+			return nil, fmt.Errorf("failed to save cluster state: %w", err)
+		}
+	}
+
 	args := []string{"start", "-p", config.Name}
 
 	if config.Version != "" {
@@ -94,6 +191,14 @@ func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig
 	fmt.Println("creating minikube cluster...")
 	_, err := cmd.CombinedOutput()
 	if err != nil {
+		// Update cluster state to failed
+		if l.stateManager != nil {
+			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, config.Name); stateErr == nil && clusterState != nil {
+				clusterState.Status = "failed"
+				clusterState.UpdatedAt = time.Now()
+				l.stateManager.SaveClusterState(ctx, clusterState)
+			}
+		}
 		return nil, fmt.Errorf("failed to start minikube: %s", err)
 	}
 
@@ -101,15 +206,48 @@ func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig
 		fmt.Printf("warning: failed to apply some post-create configurations: %v\n", err)
 	}
 
+	// Update cluster state to running
+	if l.stateManager != nil {
+		if clusterState, err := l.stateManager.GetClusterState(ctx, config.Name); err == nil && clusterState != nil {
+			clusterState.Status = "running"
+			clusterState.UpdatedAt = time.Now()
+			l.stateManager.SaveClusterState(ctx, clusterState)
+		}
+	}
+
 	fmt.Printf("successfully created cluster: %s\n", config.Name)
 	return l.GetCluster(ctx, config.Name)
 }
 
 func (l *LocalProvider) DeleteCluster(ctx context.Context, name string) error {
+	// Update state to deleting
+	if l.stateManager != nil {
+		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
+			clusterState.Status = "deleting"
+			clusterState.UpdatedAt = time.Now()
+			l.stateManager.SaveClusterState(ctx, clusterState)
+		}
+	}
+
 	cmd := exec.Command("minikube", "delete", "-p", name)
 	_, err := cmd.CombinedOutput()
 	if err != nil {
+		// Update state back to previous status if deletion failed
+		if l.stateManager != nil {
+			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, name); stateErr == nil && clusterState != nil {
+				clusterState.Status = "error"
+				clusterState.UpdatedAt = time.Now()
+				l.stateManager.SaveClusterState(ctx, clusterState)
+			}
+		}
 		return fmt.Errorf("failed to delete cluster %s: %s", name, err)
+	}
+
+	// Remove cluster state from database
+	if l.stateManager != nil {
+		if err := l.stateManager.DeleteClusterState(ctx, name); err != nil {
+			fmt.Printf("warning: failed to clean up cluster state: %v\n", err)
+		}
 	}
 
 	return nil
@@ -501,6 +639,24 @@ func (l *LocalProvider) applyNetworkConfig(ctx context.Context, clusterName stri
 			return fmt.Errorf("failed to enable ingress addon: %w", err)
 		}
 		fmt.Printf("Enabled ingress controller for cluster %s\n", clusterName)
+
+		// Track ingress as a resource
+		if l.stateManager != nil {
+			resource := &state.Resource{
+				ID:          clusterName + "-ingress",
+				ClusterName: clusterName,
+				Type:        "addon",
+				Name:        "ingress",
+				Status:      "enabled",
+				Config: map[string]any{
+					"controller": netConfig.Ingress.Controller,
+					"enabled":    true,
+				},
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			}
+			l.stateManager.SaveResource(ctx, resource)
+		}
 	}
 
 	if netConfig.LoadBalancer != nil && netConfig.LoadBalancer.Enabled {
@@ -509,6 +665,24 @@ func (l *LocalProvider) applyNetworkConfig(ctx context.Context, clusterName stri
 			return fmt.Errorf("failed to enable metallb addon: %w", err)
 		}
 		fmt.Printf("Enabled MetalLB load balancer for cluster %s\n", clusterName)
+
+		// Track load balancer as a resource
+		if l.stateManager != nil {
+			resource := &state.Resource{
+				ID:          clusterName + "-metallb",
+				ClusterName: clusterName,
+				Type:        "addon",
+				Name:        "metallb",
+				Status:      "enabled",
+				Config: map[string]any{
+					"type":    netConfig.LoadBalancer.Type,
+					"enabled": true,
+				},
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			}
+			l.stateManager.SaveResource(ctx, resource)
+		}
 	}
 
 	return nil

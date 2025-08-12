@@ -108,8 +108,7 @@ var clusterCreateCmd = &cobra.Command{
 		var p providers.Provider
 		switch provider {
 		case "local":
-			localProvider := services.GetLocalProvider()
-			p = &localProvider
+			p = services.GetLocalProvider()
 		default:
 			return fmt.Errorf("unsupported provider: %s", provider)
 		}
@@ -142,8 +141,7 @@ var clusterListCmd = &cobra.Command{
 		var p providers.Provider
 		switch provider {
 		case "local":
-			localProvider := services.GetLocalProvider()
-			p = &localProvider
+			p = services.GetLocalProvider()
 		default:
 			return fmt.Errorf("unsupported provider: %s", provider)
 		}
@@ -196,8 +194,7 @@ var clusterDeleteCmd = &cobra.Command{
 		clusterName := args[0]
 		services.Log(fmt.Sprintf("Deleting cluster: %s", clusterName))
 
-		localProvider := services.GetLocalProvider()
-		p := &localProvider
+		p := services.GetLocalProvider()
 		err := p.DeleteCluster(context.Background(), clusterName)
 		if err != nil {
 			return fmt.Errorf("failed to delete cluster: %w", err)
@@ -238,8 +235,7 @@ var clusterStartCmd = &cobra.Command{
 		clusterName := args[0]
 		services.Log(fmt.Sprintf("Starting cluster: %s", clusterName))
 
-		localProvider := services.GetLocalProvider()
-		p := &localProvider
+		p := services.GetLocalProvider()
 		err := p.StartCluster(context.Background(), clusterName)
 		if err != nil {
 			return fmt.Errorf("failed to start cluster: %w", err)
@@ -280,8 +276,7 @@ var clusterStopCmd = &cobra.Command{
 		clusterName := args[0]
 		services.Log(fmt.Sprintf("Stopping cluster: %s", clusterName))
 
-		localProvider := services.GetLocalProvider()
-		p := &localProvider
+		p := services.GetLocalProvider()
 		err := p.StopCluster(context.Background(), clusterName)
 		if err != nil {
 			return fmt.Errorf("failed to stop cluster: %w", err)
@@ -324,8 +319,7 @@ var clusterScaleCmd = &cobra.Command{
 		
 		services.Log(fmt.Sprintf("Scaling cluster: %s to %d nodes", clusterName, nodeCount))
 
-		localProvider := services.GetLocalProvider()
-		p := &localProvider
+		p := services.GetLocalProvider()
 		err := p.ScaleCluster(context.Background(), clusterName, nodeCount)
 		if err != nil {
 			return fmt.Errorf("failed to scale cluster: %w", err)
@@ -349,6 +343,118 @@ var clusterScaleCmd = &cobra.Command{
 		}
 
 		services.Log("Cluster scale completed successfully")
+		return nil
+	},
+}
+
+var clusterStatusCmd = &cobra.Command{
+	Use:   "status [name]",
+	Short: "Show detailed cluster status",
+	Long:  `Show detailed status including state information and resources for a cluster.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		services := GetServices()
+		if services == nil {
+			return fmt.Errorf("services not initialized")
+		}
+
+		clusterName := args[0]
+		stateManager := services.GetStateManager()
+
+		// Get cluster state from database
+		clusterState, err := stateManager.GetClusterState(context.Background(), clusterName)
+		if err != nil {
+			return fmt.Errorf("failed to get cluster state: %w", err)
+		}
+
+		if clusterState == nil {
+			// Try to get cluster info from provider directly
+			p := services.GetLocalProvider()
+			cluster, err := p.GetCluster(context.Background(), clusterName)
+			if err != nil {
+				return fmt.Errorf("cluster '%s' not found in state database or provider", clusterName)
+			}
+			
+			// Display basic cluster info
+			if services.GetOutput() == "json" {
+				jsonOutput, err := json.MarshalIndent(cluster, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to marshal cluster: %w", err)
+				}
+				fmt.Println(string(jsonOutput))
+			} else {
+				fmt.Printf("Cluster: %s (not tracked in state)\n", clusterName)
+				fmt.Printf("Provider: %s\n", cluster.Provider)
+				fmt.Printf("Status: %s\n", cluster.Status)
+				fmt.Printf("Nodes: %d\n", cluster.NodeCount)
+				fmt.Printf("Version: %s\n", cluster.Version)
+			}
+			return nil
+		}
+
+		if services.GetOutput() == "json" {
+			jsonOutput, err := json.MarshalIndent(clusterState, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to marshal cluster state: %w", err)
+			}
+			fmt.Println(string(jsonOutput))
+		} else {
+			fmt.Printf("Cluster: %s\n", clusterState.Name)
+			fmt.Printf("Provider: %s\n", clusterState.Provider)
+			fmt.Printf("Region: %s\n", clusterState.Region)
+			fmt.Printf("Status: %s\n", clusterState.Status)
+			fmt.Printf("Nodes: %d\n", clusterState.NodeCount)
+			fmt.Printf("Version: %s\n", clusterState.Version)
+			fmt.Printf("Created: %s\n", clusterState.CreatedAt.Format("2006-01-02 15:04:05"))
+			fmt.Printf("Updated: %s\n", clusterState.UpdatedAt.Format("2006-01-02 15:04:05"))
+			fmt.Printf("Created by: %s\n", clusterState.CreatedBy)
+
+			if len(clusterState.Metadata) > 0 {
+				fmt.Printf("\nMetadata:\n")
+				for key, value := range clusterState.Metadata {
+					fmt.Printf("  %s: %s\n", key, value)
+				}
+			}
+
+			if len(clusterState.Resources) > 0 {
+				fmt.Printf("\nResources:\n")
+				for _, resource := range clusterState.Resources {
+					fmt.Printf("  %s (%s): %s\n", resource.Name, resource.Type, resource.Status)
+				}
+			}
+
+			// Show configuration summary
+			showConfig, _ := cmd.Flags().GetBool("show-config")
+			if showConfig && len(clusterState.Config) > 0 {
+				fmt.Printf("\nConfiguration:\n")
+				configJSON, _ := json.MarshalIndent(clusterState.Config, "  ", "  ")
+				fmt.Printf("  %s\n", string(configJSON))
+			}
+		}
+
+		return nil
+	},
+}
+
+var clusterHistoryCmd = &cobra.Command{
+	Use:   "history [name]",
+	Short: "Show cluster operation history",
+	Long:  `Show the history of operations performed on a cluster.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		services := GetServices()
+		if services == nil {
+			return fmt.Errorf("services not initialized")
+		}
+
+		clusterName := args[0]
+		
+		// For now, show basic state info
+		// TODO: Implement proper audit trail in next phase
+		fmt.Printf("History for cluster '%s':\n", clusterName)
+		fmt.Printf("Note: Detailed operation history will be available in a future version.\n")
+		fmt.Printf("Use 'atlas-cli cluster status %s' to see current state information.\n", clusterName)
+
 		return nil
 	},
 }
@@ -494,6 +600,8 @@ func init() {
 	clusterCmd.AddCommand(clusterStopCmd)
 	clusterCmd.AddCommand(clusterScaleCmd)
 	clusterCmd.AddCommand(clusterGenerateConfigCmd)
+	clusterCmd.AddCommand(clusterStatusCmd)
+	clusterCmd.AddCommand(clusterHistoryCmd)
 
 	clusterCreateCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
 	clusterCreateCmd.Flags().StringP("region", "r", "local", "Region to create cluster in")
@@ -517,4 +625,6 @@ func init() {
 	clusterScaleCmd.MarkFlagRequired("nodes")
 
 	clusterGenerateConfigCmd.Flags().StringP("output", "o", "", "Output file path (default: stdout)")
+	
+	clusterStatusCmd.Flags().Bool("show-config", false, "Show full cluster configuration")
 }
