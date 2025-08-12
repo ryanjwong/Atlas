@@ -91,7 +91,7 @@ var clusterCreateCmd = &cobra.Command{
 				config.ResourceConfig = &providers.ResourceConfig{}
 				if enableMonitoring {
 					config.ResourceConfig.Monitoring = &providers.MonitoringConfig{
-						Enabled: true,
+						Enabled:    true,
 						Prometheus: &providers.PrometheusConfig{Enabled: true},
 					}
 				}
@@ -469,8 +469,8 @@ var clusterHistoryCmd = &cobra.Command{
 		}
 
 		fmt.Printf("History for cluster '%s':\n", clusterName)
-		fmt.Printf("%-20s %-10s %-12s %-12s %-10s %-s\n", "STARTED", "TYPE", "STATUS", "USER", "DURATION", "ERROR")
-		fmt.Printf("%-20s %-10s %-12s %-12s %-10s %-s\n", "--------------------", "----------", "------------", "------------", "----------", "-----")
+		fmt.Printf("%-20s %-10s %-12s %-12s %-15s %-s\n", "STARTED", "TYPE", "STATUS", "USER", "DURATION", "ERROR")
+		fmt.Printf("%-20s %-10s %-12s %-12s %-15s %-s\n", "--------------------", "----------", "------------", "------------", "---------------", "-----")
 		for _, op := range operationHistory {
 			started := op.StartedAt.Format("2006-01-02 15:04:05")
 			duration := "-"
