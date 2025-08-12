@@ -75,7 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_operation_history_type ON operation_history(opera
 CREATE INDEX IF NOT EXISTS idx_operation_history_status ON operation_history(operation_status);
 CREATE INDEX IF NOT EXISTS idx_operation_history_time ON operation_history(started_at);
 `
-
+// SQLiteStateManager implements StateManager using sqlite3
 type SQLiteStateManager struct {
 	db *sql.DB
 }
