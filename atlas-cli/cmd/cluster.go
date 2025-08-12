@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/providers"
 	"github.com/spf13/cobra"
@@ -361,35 +362,98 @@ var clusterStatusCmd = &cobra.Command{
 		clusterName := args[0]
 		stateManager := services.GetStateManager()
 
-		// Get cluster state from database
 		clusterState, err := stateManager.GetClusterState(context.Background(), clusterName)
 		if err != nil {
 			return fmt.Errorf("failed to get cluster state: %w", err)
 		}
 
-		if clusterState == nil {
-			// Try to get cluster info from provider directly
-			p := services.GetLocalProvider()
-			cluster, err := p.GetCluster(context.Background(), clusterName)
-			if err != nil {
-				return fmt.Errorf("cluster '%s' not found in state database or provider", clusterName)
-			}
+		p := services.GetLocalProvider()
+		actualCluster, providerErr := p.GetCluster(context.Background(), clusterName)
 
-			// Display basic cluster info
+		syncFlag, _ := cmd.Flags().GetBool("sync")
+
+		if clusterState == nil && providerErr != nil {
+			return fmt.Errorf("cluster '%s' not found in state database or provider", clusterName)
+		}
+
+		if clusterState == nil && actualCluster != nil {
 			if services.GetOutput() == "json" {
-				jsonOutput, err := json.MarshalIndent(cluster, "", "  ")
+				jsonOutput, err := json.MarshalIndent(actualCluster, "", "  ")
 				if err != nil {
 					return fmt.Errorf("failed to marshal cluster: %w", err)
 				}
 				fmt.Println(string(jsonOutput))
 			} else {
-				fmt.Printf("Cluster: %s (not tracked in state)\n", clusterName)
-				fmt.Printf("Provider: %s\n", cluster.Provider)
-				fmt.Printf("Status: %s\n", cluster.Status)
-				fmt.Printf("Nodes: %d\n", cluster.NodeCount)
-				fmt.Printf("Version: %s\n", cluster.Version)
+				fmt.Printf("Cluster: %s (not tracked in DB)\n", clusterName)
+				fmt.Printf("Provider: %s\n", actualCluster.Provider)
+				fmt.Printf("Status: %s\n", actualCluster.Status)
+				fmt.Printf("Nodes: %d\n", actualCluster.NodeCount)
+				fmt.Printf("Version: %s\n", actualCluster.Version)
 			}
 			return nil
+		}
+
+		if clusterState != nil && providerErr != nil {
+			if services.GetOutput() == "json" {
+				jsonOutput, err := json.MarshalIndent(clusterState, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to marshal cluster state: %w", err)
+				}
+				fmt.Println(string(jsonOutput))
+			} else {
+				fmt.Printf("Cluster: %s (exists in database but not found in provider - may have been deleted externally)\n", clusterName)
+				fmt.Printf("Database Status: %s\n", clusterState.Status)
+				fmt.Printf("Created: %s\n", clusterState.CreatedAt.Format("2006-01-02 15:04:05"))
+				fmt.Printf("Last Updated: %s\n", clusterState.UpdatedAt.Format("2006-01-02 15:04:05"))
+			}
+			return nil
+		}
+
+		if clusterState != nil && actualCluster != nil {
+			driftDetected := false
+			var driftMessages []string
+
+			if clusterState.Status != string(actualCluster.Status) {
+				driftDetected = true
+				driftMessages = append(driftMessages, fmt.Sprintf("Status: DB='%s' vs Actual='%s'",
+					clusterState.Status, actualCluster.Status))
+			}
+
+			if clusterState.NodeCount != actualCluster.NodeCount {
+				driftDetected = true
+				driftMessages = append(driftMessages, fmt.Sprintf("Nodes: DB=%d vs Actual=%d",
+					clusterState.NodeCount, actualCluster.NodeCount))
+			}
+
+			if clusterState.Version != actualCluster.Version && actualCluster.Version != "" {
+				driftDetected = true
+				driftMessages = append(driftMessages, fmt.Sprintf("Version: DB='%s' vs Actual='%s'",
+					clusterState.Version, actualCluster.Version))
+			}
+
+			if driftDetected {
+				if !syncFlag {
+					fmt.Printf("Drift detected between database and actual cluster state:\n")
+					for _, msg := range driftMessages {
+						fmt.Printf("   %s\n", msg)
+					}
+					fmt.Printf("Use --sync flag to synchronize database with actual state\n\n")
+				} else {
+					fmt.Printf("Synchronizing database with actual cluster state...\n")
+					clusterState.Status = string(actualCluster.Status)
+					clusterState.NodeCount = actualCluster.NodeCount
+					if actualCluster.Version != "" {
+						clusterState.Version = actualCluster.Version
+					}
+					clusterState.UpdatedAt = time.Now()
+
+					err = stateManager.SaveClusterState(context.Background(), clusterState)
+					if err != nil {
+						return fmt.Errorf("failed to sync database state: %w", err)
+					}
+					fmt.Printf("Database synchronized successfully\n\n")
+				}
+			}
 		}
 
 		if services.GetOutput() == "json" {
@@ -423,7 +487,6 @@ var clusterStatusCmd = &cobra.Command{
 				}
 			}
 
-			// Show configuration summary
 			showConfig, _ := cmd.Flags().GetBool("show-config")
 			if showConfig && len(clusterState.Config) > 0 {
 				fmt.Printf("\nConfiguration:\n")
@@ -660,6 +723,7 @@ func init() {
 	clusterGenerateConfigCmd.Flags().StringP("output", "o", "", "Output file path (default: stdout)")
 
 	clusterStatusCmd.Flags().Bool("show-config", false, "Show full cluster configuration")
+	clusterStatusCmd.Flags().Bool("sync", false, "Synchronize database state with actual cluster state")
 
 	clusterHistoryCmd.Flags().IntP("limit", "l", 50, "Number of audit logs to display")
 }

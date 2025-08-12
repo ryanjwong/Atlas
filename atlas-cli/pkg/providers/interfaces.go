@@ -39,15 +39,15 @@ type ClusterConfig struct {
 
 // NetworkConfig defines networking configuration for clusters
 type NetworkConfig struct {
-	PodCIDR        string            `yaml:"podCIDR,omitempty"`
-	ServiceCIDR    string            `yaml:"serviceCIDR,omitempty"`
-	ClusterDNS     string            `yaml:"clusterDNS,omitempty"`
-	NetworkPlugin  string            `yaml:"networkPlugin,omitempty"`
-	DNSPolicy      string            `yaml:"dnsPolicy,omitempty"`
-	ExtraPortMaps  []PortMapping     `yaml:"extraPortMaps,omitempty"`
-	APIServerPort  int               `yaml:"apiServerPort,omitempty"`
-	Ingress        *IngressConfig    `yaml:"ingress,omitempty"`
-	LoadBalancer   *LoadBalancerConfig `yaml:"loadBalancer,omitempty"`
+	PodCIDR       string              `yaml:"podCIDR,omitempty"`
+	ServiceCIDR   string              `yaml:"serviceCIDR,omitempty"`
+	ClusterDNS    string              `yaml:"clusterDNS,omitempty"`
+	NetworkPlugin string              `yaml:"networkPlugin,omitempty"`
+	DNSPolicy     string              `yaml:"dnsPolicy,omitempty"`
+	ExtraPortMaps []PortMapping       `yaml:"extraPortMaps,omitempty"`
+	APIServerPort int                 `yaml:"apiServerPort,omitempty"`
+	Ingress       *IngressConfig      `yaml:"ingress,omitempty"`
+	LoadBalancer  *LoadBalancerConfig `yaml:"loadBalancer,omitempty"`
 }
 
 // PortMapping defines port mapping for exposing services
@@ -74,14 +74,14 @@ type LoadBalancerConfig struct {
 
 // SecurityConfig defines security configuration for clusters
 type SecurityConfig struct {
-	RBAC                *RBACConfig           `yaml:"rbac,omitempty"`
-	PodSecurityPolicy   *PodSecurityConfig    `yaml:"podSecurityPolicy,omitempty"`
-	NetworkPolicy       *NetworkPolicyConfig  `yaml:"networkPolicy,omitempty"`
-	Encryption          *EncryptionConfig     `yaml:"encryption,omitempty"`
-	AuditLogging        *AuditConfig          `yaml:"auditLogging,omitempty"`
-	ImageSecurity       *ImageSecurityConfig  `yaml:"imageSecurity,omitempty"`
-	AuthenticationMode  string                `yaml:"authenticationMode,omitempty"`
-	ServiceMesh         *ServiceMeshConfig    `yaml:"serviceMesh,omitempty"`
+	RBAC               *RBACConfig          `yaml:"rbac,omitempty"`
+	PodSecurityPolicy  *PodSecurityConfig   `yaml:"podSecurityPolicy,omitempty"`
+	NetworkPolicy      *NetworkPolicyConfig `yaml:"networkPolicy,omitempty"`
+	Encryption         *EncryptionConfig    `yaml:"encryption,omitempty"`
+	AuditLogging       *AuditConfig         `yaml:"auditLogging,omitempty"`
+	ImageSecurity      *ImageSecurityConfig `yaml:"imageSecurity,omitempty"`
+	AuthenticationMode string               `yaml:"authenticationMode,omitempty"`
+	ServiceMesh        *ServiceMeshConfig   `yaml:"serviceMesh,omitempty"`
 }
 
 // RBACConfig defines role-based access control settings
@@ -101,17 +101,17 @@ type RBACRule struct {
 
 // PodSecurityConfig defines pod security policy settings
 type PodSecurityConfig struct {
-	Enabled           bool     `yaml:"enabled"`
+	Enabled             bool     `yaml:"enabled"`
 	AllowedCapabilities []string `yaml:"allowedCapabilities,omitempty"`
-	ForbiddenSysctls  []string `yaml:"forbiddenSysctls,omitempty"`
-	RunAsNonRoot      bool     `yaml:"runAsNonRoot,omitempty"`
-	SELinuxOptions    string   `yaml:"seLinuxOptions,omitempty"`
+	ForbiddenSysctls    []string `yaml:"forbiddenSysctls,omitempty"`
+	RunAsNonRoot        bool     `yaml:"runAsNonRoot,omitempty"`
+	SELinuxOptions      string   `yaml:"seLinuxOptions,omitempty"`
 }
 
 // NetworkPolicyConfig defines network policy settings
 type NetworkPolicyConfig struct {
-	Enabled       bool              `yaml:"enabled"`
-	DefaultPolicy string            `yaml:"defaultPolicy,omitempty"`
+	Enabled       bool                `yaml:"enabled"`
+	DefaultPolicy string              `yaml:"defaultPolicy,omitempty"`
 	Rules         []NetworkPolicyRule `yaml:"rules,omitempty"`
 }
 
@@ -142,28 +142,28 @@ type AuditConfig struct {
 
 // ImageSecurityConfig defines container image security settings
 type ImageSecurityConfig struct {
-	ScanEnabled      bool     `yaml:"scanEnabled"`
-	AllowedRegistries []string `yaml:"allowedRegistries,omitempty"`
-	SignatureVerification bool `yaml:"signatureVerification,omitempty"`
-	VulnerabilityThreshold string `yaml:"vulnerabilityThreshold,omitempty"`
+	ScanEnabled            bool     `yaml:"scanEnabled"`
+	AllowedRegistries      []string `yaml:"allowedRegistries,omitempty"`
+	SignatureVerification  bool     `yaml:"signatureVerification,omitempty"`
+	VulnerabilityThreshold string   `yaml:"vulnerabilityThreshold,omitempty"`
 }
 
 // ServiceMeshConfig defines service mesh settings
 type ServiceMeshConfig struct {
-	Enabled    bool              `yaml:"enabled"`
-	Provider   string            `yaml:"provider,omitempty"`
-	Config     map[string]string `yaml:"config,omitempty"`
-	mTLS       bool              `yaml:"mTLS,omitempty"`
+	Enabled  bool              `yaml:"enabled"`
+	Provider string            `yaml:"provider,omitempty"`
+	Config   map[string]string `yaml:"config,omitempty"`
+	mTLS     bool              `yaml:"mTLS,omitempty"`
 }
 
 // ResourceConfig defines resource policies and constraints
 type ResourceConfig struct {
-	Limits        *ResourceLimits        `yaml:"limits,omitempty"`
-	Requests      *ResourceRequests      `yaml:"requests,omitempty"`
-	Quotas        *ResourceQuotas        `yaml:"quotas,omitempty"`
-	AutoScaling   *AutoScalingConfig     `yaml:"autoScaling,omitempty"`
-	Storage       *StorageConfig         `yaml:"storage,omitempty"`
-	Monitoring    *MonitoringConfig      `yaml:"monitoring,omitempty"`
+	Limits      *ResourceLimits    `yaml:"limits,omitempty"`
+	Requests    *ResourceRequests  `yaml:"requests,omitempty"`
+	Quotas      *ResourceQuotas    `yaml:"quotas,omitempty"`
+	AutoScaling *AutoScalingConfig `yaml:"autoScaling,omitempty"`
+	Storage     *StorageConfig     `yaml:"storage,omitempty"`
+	Monitoring  *MonitoringConfig  `yaml:"monitoring,omitempty"`
 }
 
 // ResourceLimits defines resource limit constraints
@@ -185,8 +185,8 @@ type ResourceRequests struct {
 
 // ResourceQuotas defines namespace-level resource quotas
 type ResourceQuotas struct {
-	Namespaces    map[string]NamespaceQuota `yaml:"namespaces,omitempty"`
-	DefaultQuota  *NamespaceQuota           `yaml:"defaultQuota,omitempty"`
+	Namespaces   map[string]NamespaceQuota `yaml:"namespaces,omitempty"`
+	DefaultQuota *NamespaceQuota           `yaml:"defaultQuota,omitempty"`
 }
 
 // NamespaceQuota defines quota limits for a namespace
@@ -200,22 +200,22 @@ type NamespaceQuota struct {
 
 // AutoScalingConfig defines auto-scaling policies
 type AutoScalingConfig struct {
-	Enabled           bool   `yaml:"enabled"`
-	MinNodes          int    `yaml:"minNodes,omitempty"`
-	MaxNodes          int    `yaml:"maxNodes,omitempty"`
-	TargetCPU         int    `yaml:"targetCPU,omitempty"`
-	TargetMemory      int    `yaml:"targetMemory,omitempty"`
-	ScaleUpDelay      string `yaml:"scaleUpDelay,omitempty"`
-	ScaleDownDelay    string `yaml:"scaleDownDelay,omitempty"`
-	HorizontalPodAutoScaler bool `yaml:"horizontalPodAutoScaler,omitempty"`
+	Enabled                 bool   `yaml:"enabled"`
+	MinNodes                int    `yaml:"minNodes,omitempty"`
+	MaxNodes                int    `yaml:"maxNodes,omitempty"`
+	TargetCPU               int    `yaml:"targetCPU,omitempty"`
+	TargetMemory            int    `yaml:"targetMemory,omitempty"`
+	ScaleUpDelay            string `yaml:"scaleUpDelay,omitempty"`
+	ScaleDownDelay          string `yaml:"scaleDownDelay,omitempty"`
+	HorizontalPodAutoScaler bool   `yaml:"horizontalPodAutoScaler,omitempty"`
 }
 
 // StorageConfig defines storage policies
 type StorageConfig struct {
-	DefaultStorageClass string              `yaml:"defaultStorageClass,omitempty"`
+	DefaultStorageClass string               `yaml:"defaultStorageClass,omitempty"`
 	StorageClasses      []StorageClassConfig `yaml:"storageClasses,omitempty"`
-	VolumeExpansion     bool                `yaml:"volumeExpansion,omitempty"`
-	SnapshotController  bool                `yaml:"snapshotController,omitempty"`
+	VolumeExpansion     bool                 `yaml:"volumeExpansion,omitempty"`
+	SnapshotController  bool                 `yaml:"snapshotController,omitempty"`
 }
 
 // StorageClassConfig defines storage class configuration
@@ -237,12 +237,12 @@ type MonitoringConfig struct {
 
 // PrometheusConfig defines Prometheus monitoring settings
 type PrometheusConfig struct {
-	Enabled         bool              `yaml:"enabled"`
-	Retention       string            `yaml:"retention,omitempty"`
-	StorageSize     string            `yaml:"storageSize,omitempty"`
-	ScrapeInterval  string            `yaml:"scrapeInterval,omitempty"`
-	ExternalURL     string            `yaml:"externalURL,omitempty"`
-	Config          map[string]string `yaml:"config,omitempty"`
+	Enabled        bool              `yaml:"enabled"`
+	Retention      string            `yaml:"retention,omitempty"`
+	StorageSize    string            `yaml:"storageSize,omitempty"`
+	ScrapeInterval string            `yaml:"scrapeInterval,omitempty"`
+	ExternalURL    string            `yaml:"externalURL,omitempty"`
+	Config         map[string]string `yaml:"config,omitempty"`
 }
 
 // GrafanaConfig defines Grafana dashboard settings
@@ -255,10 +255,10 @@ type GrafanaConfig struct {
 
 // LogConfig defines log aggregation settings
 type LogConfig struct {
-	Enabled    bool              `yaml:"enabled"`
-	Backend    string            `yaml:"backend,omitempty"`
-	Retention  string            `yaml:"retention,omitempty"`
-	Config     map[string]string `yaml:"config,omitempty"`
+	Enabled   bool              `yaml:"enabled"`
+	Backend   string            `yaml:"backend,omitempty"`
+	Retention string            `yaml:"retention,omitempty"`
+	Config    map[string]string `yaml:"config,omitempty"`
 }
 
 // TracingConfig defines distributed tracing settings

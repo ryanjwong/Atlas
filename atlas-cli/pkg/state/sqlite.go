@@ -130,7 +130,7 @@ func (s *SQLiteStateManager) DeleteClusterState(ctx context.Context, name string
 	}
 
 	if rowsAffected == 0 {
-		return sql.ErrNoRows // Cluster not found
+		return sql.ErrNoRows
 	}
 
 	return nil
@@ -490,12 +490,10 @@ func (s *SQLiteStateManager) SaveResource(ctx context.Context, resource *Resourc
 
 // Validate implements StateManager.
 func (s *SQLiteStateManager) Validate(ctx context.Context) error {
-	// Check database connection
 	if err := s.Health(ctx); err != nil {
 		return err
 	}
 
-	// Verify table structure exists
 	tables := []string{"clusters", "cluster_resources", "state_locks", "operation_history"}
 	for _, table := range tables {
 		query := `SELECT name FROM sqlite_master WHERE type='table' AND name=?`

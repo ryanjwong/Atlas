@@ -302,7 +302,6 @@ func (l *LocalProvider) DeleteCluster(ctx context.Context, name string) error {
 		return fmt.Errorf("failed to delete cluster %s: %s", name, err)
 	}
 
-	// Remove cluster state from database
 	if l.stateManager != nil {
 		if err := l.stateManager.DeleteClusterState(ctx, name); err != nil {
 			fmt.Printf("warning: failed to clean up cluster state: %v\n", err)
@@ -715,7 +714,6 @@ func (l *LocalProvider) applyNetworkConfig(ctx context.Context, clusterName stri
 		}
 		fmt.Printf("Enabled ingress controller for cluster %s\n", clusterName)
 
-		// Track ingress as a resource
 		if l.stateManager != nil {
 			resource := &state.Resource{
 				ID:          clusterName + "-ingress",
@@ -741,7 +739,6 @@ func (l *LocalProvider) applyNetworkConfig(ctx context.Context, clusterName stri
 		}
 		fmt.Printf("Enabled MetalLB load balancer for cluster %s\n", clusterName)
 
-		// Track load balancer as a resource
 		if l.stateManager != nil {
 			resource := &state.Resource{
 				ID:          clusterName + "-metallb",
