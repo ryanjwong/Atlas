@@ -22,18 +22,8 @@ type Profile struct {
 }
 
 func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
-	cmd := exec.Command("minikube", "status", "-p", name)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("cluster %s does not exist: %s", name, err)
-	}
-
-	if strings.Contains(string(output), "Running") {
-		return nil
-	}
-
-	cmd = exec.Command("minikube", "start", "-p", name)
-	_, err = cmd.CombinedOutput()
+	cmd := exec.Command("minikube", "start", "-p", name)
+	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to start cluster %s: %s", name, err)
 	}
@@ -42,14 +32,8 @@ func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
 }
 
 func (l *LocalProvider) StopCluster(ctx context.Context, name string) error {
-	cmd := exec.Command("minikube", "status", "-p", name)
+	cmd := exec.Command("minikube", "stop", "-p", name)
 	_, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("cluster %s does not exist: %s", name, err)
-	}
-
-	cmd = exec.Command("minikube", "stop", "-p", name)
-	_, err = cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to stop cluster %s: %s", name, err)
 	}
@@ -99,7 +83,10 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 	} else if strings.Contains(statusStr, "Stopped") {
 		status = ClusterStatusStopped
 	} else if err != nil {
-		return nil, fmt.Errorf("failed to fetch cluster %s, check minikube and ensure this profile is not in a error state: %s", name, err)
+		if strings.Contains(err.Error(), "exit status 7") || strings.Contains(statusStr, "does not exist") {
+			return nil, fmt.Errorf("cluster %s does not exist", name)
+		}
+		status = ClusterStatusError
 	} else {
 		status = ClusterStatusError
 	}
@@ -194,6 +181,9 @@ func (l *LocalProvider) ListClusters(ctx context.Context) ([]*Cluster, error) {
 	for _, profile := range profiles.Valid {
 		cluster, err := l.GetCluster(ctx, profile.Name)
 		if err != nil {
+			if strings.Contains(err.Error(), "does not exist") {
+				continue
+			}
 			return nil, fmt.Errorf("error getting cluster %s: %s", profile.Name, err)
 		}
 		clusters = append(clusters, cluster)
