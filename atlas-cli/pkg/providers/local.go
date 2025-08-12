@@ -5,24 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"os/user"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/ryanjwong/Atlas/atlas-cli/pkg/audit"
-	"github.com/ryanjwong/Atlas/atlas-cli/pkg/state"
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/logsource"
 )
 
+// LocalProvider implements Provider for local minikube clusters
 type LocalProvider struct {
-	stateManager state.StateManager
-	auditService audit.AuditService
+	logSource logsource.LogSource
 }
 
-func NewLocalProvider(stateManager state.StateManager, auditService audit.AuditService) *LocalProvider {
+// NewLocalProvider creates a new local provider
+func NewLocalProvider() *LocalProvider {
 	return &LocalProvider{
-		stateManager: stateManager,
-		auditService: auditService,
+		logSource: logsource.NewMinikubeLogSource(),
 	}
 }
 
@@ -35,157 +33,31 @@ type Profile struct {
 	Name string `json:"Name"`
 }
 
-func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
-	if l.stateManager != nil {
-		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
-			clusterState.Status = "starting"
-			clusterState.UpdatedAt = time.Now()
-			l.stateManager.SaveClusterState(ctx, clusterState)
-		}
-	}
-
-	if l.auditService != nil {
-		opCtx, err := l.auditService.StartOperation(ctx, name, state.OpTypeStart, nil)
-		if err != nil {
-			return fmt.Errorf("failed to start audit operation: %w", err)
-		}
-		defer func() {
-			if opCtx != nil {
-				if err != nil {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
-				} else {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
-				}
-			}
-		}()
-	}
-
-	cmd := exec.Command("minikube", "start", "-p", name)
-	_, err := cmd.CombinedOutput()
-	if err != nil {
-		if l.stateManager != nil {
-			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, name); stateErr == nil && clusterState != nil {
-				clusterState.Status = "error"
-				clusterState.UpdatedAt = time.Now()
-				l.stateManager.SaveClusterState(ctx, clusterState)
-			}
-		}
-		return fmt.Errorf("failed to start cluster %s: %s", name, err)
-	}
-
-	if l.stateManager != nil {
-		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
-			clusterState.Status = "running"
-			clusterState.UpdatedAt = time.Now()
-			l.stateManager.SaveClusterState(ctx, clusterState)
-		}
-	}
-
-	return nil
+// GetLogSource returns the log source for reading operation history
+func (l *LocalProvider) GetLogSource() logsource.LogSource {
+	return l.logSource
 }
 
-func (l *LocalProvider) StopCluster(ctx context.Context, name string) error {
-	if l.stateManager != nil {
-		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
-			clusterState.Status = "stopping"
-			clusterState.UpdatedAt = time.Now()
-			l.stateManager.SaveClusterState(ctx, clusterState)
-		}
-	}
-
-	if l.auditService != nil {
-		opCtx, err := l.auditService.StartOperation(ctx, name, state.OpTypeStop, nil)
-		if err != nil {
-			return fmt.Errorf("failed to start audit operation: %w", err)
-		}
-		defer func() {
-			if opCtx != nil {
-				if err != nil {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
-				} else {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
-				}
-			}
-		}()
-	}
-
-	cmd := exec.Command("minikube", "stop", "-p", name)
-	_, err := cmd.CombinedOutput()
-	if err != nil {
-		if l.stateManager != nil {
-			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, name); stateErr == nil && clusterState != nil {
-				clusterState.Status = "error"
-				clusterState.UpdatedAt = time.Now()
-				l.stateManager.SaveClusterState(ctx, clusterState)
-			}
-		}
-		return fmt.Errorf("failed to stop cluster %s: %s", name, err)
-	}
-
-	if l.stateManager != nil {
-		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
-			clusterState.Status = "stopped"
-			clusterState.UpdatedAt = time.Now()
-			l.stateManager.SaveClusterState(ctx, clusterState)
-		}
-	}
-
-	return nil
+// GetProviderName returns the name of this provider
+func (l *LocalProvider) GetProviderName() string {
+	return "local"
 }
 
+// GetSupportedRegions returns the list of supported regions for the local provider
+func (l *LocalProvider) GetSupportedRegions() []string {
+	return []string{"local"}
+}
+
+// GetSupportedVersions returns the list of supported Kubernetes versions for the local provider
+func (l *LocalProvider) GetSupportedVersions() []string {
+	return []string{"v1.31.0", "v1.30.0", "v1.29.0", "v1.28.0", "v1.27.0"}
+}
+
+// CreateCluster creates a new minikube cluster with the specified configuration
 func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
-	if l.stateManager != nil {
-		currentUser, _ := user.Current()
-		username := "atlas-cli"
-		if currentUser != nil {
-			username = currentUser.Username
-		}
-		configMap := make(map[string]interface{})
-		configJSON, _ := json.Marshal(config)
-		json.Unmarshal(configJSON, &configMap)
-
-		clusterState := &state.ClusterState{
-			Name:      config.Name,
-			Provider:  "local",
-			Region:    config.Region,
-			NodeCount: config.NodeCount,
-			Version:   config.Version,
-			Status:    "creating",
-			Config:    configMap,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			CreatedBy: username,
-			Metadata: map[string]string{
-				"minikube_profile": config.Name,
-				"creation_method":  "atlas-cli",
-			},
-		}
-
-		if err := l.stateManager.SaveClusterState(ctx, clusterState); err != nil {
-			return nil, fmt.Errorf("failed to save cluster state: %w", err)
-		}
+	if err := l.ValidateConfig(config); err != nil {
+		return nil, fmt.Errorf("configuration validation failed: %w", err)
 	}
-
-	if l.auditService != nil {
-		var configMap map[string]interface{}
-		configJSON, _ := json.Marshal(config)
-		json.Unmarshal(configJSON, &configMap)
-
-		opCtx, err := l.auditService.StartOperation(ctx, config.Name, state.OpTypeCreate, configMap)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start audit operation: %w", err)
-		}
-		defer func() {
-			if opCtx != nil {
-				if err != nil {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
-				} else {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
-				}
-			}
-		}()
-	}
-
 	args := []string{"start", "-p", config.Name}
 
 	if config.Version != "" {
@@ -234,85 +106,93 @@ func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig
 		}
 	}
 
-	cmd := exec.Command("minikube", args...)
-	fmt.Println("creating minikube cluster...")
-	_, err := cmd.CombinedOutput()
+	cmd := exec.CommandContext(ctx, "minikube", args...)
+	fmt.Println("Creating minikube cluster...")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		if l.stateManager != nil {
-			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, config.Name); stateErr == nil && clusterState != nil {
-				clusterState.Status = "failed"
-				clusterState.UpdatedAt = time.Now()
-				l.stateManager.SaveClusterState(ctx, clusterState)
-			}
-		}
-		return nil, fmt.Errorf("failed to start minikube: %s", err)
+		return nil, fmt.Errorf("failed to create cluster %s: %w\nOutput: %s", config.Name, err, string(output))
 	}
 
 	if err := l.applyPostCreateConfigs(ctx, config); err != nil {
-		fmt.Printf("warning: failed to apply some post-create configurations: %v\n", err)
+		fmt.Printf("Warning: failed to apply some post-create configurations: %v\n", err)
 	}
 
-	if l.stateManager != nil {
-		if clusterState, err := l.stateManager.GetClusterState(ctx, config.Name); err == nil && clusterState != nil {
-			clusterState.Status = "running"
-			clusterState.UpdatedAt = time.Now()
-			l.stateManager.SaveClusterState(ctx, clusterState)
-		}
-	}
-
-	fmt.Printf("successfully created cluster: %s\n", config.Name)
+	fmt.Printf("Successfully created cluster: %s\n", config.Name)
 	return l.GetCluster(ctx, config.Name)
 }
 
+// DeleteCluster deletes a minikube cluster by name
 func (l *LocalProvider) DeleteCluster(ctx context.Context, name string) error {
-	if l.stateManager != nil {
-		if clusterState, err := l.stateManager.GetClusterState(ctx, name); err == nil && clusterState != nil {
-			clusterState.Status = "deleting"
-			clusterState.UpdatedAt = time.Now()
-			l.stateManager.SaveClusterState(ctx, clusterState)
-		}
-	}
-
-	if l.auditService != nil {
-		opCtx, err := l.auditService.StartOperation(ctx, name, state.OpTypeDelete, nil)
-		if err != nil {
-			return fmt.Errorf("failed to start audit operation: %w", err)
-		}
-		defer func() {
-			if opCtx != nil {
-				if err != nil {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
-				} else {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
-				}
-			}
-		}()
-	}
-
-	cmd := exec.Command("minikube", "delete", "-p", name)
-	_, err := cmd.CombinedOutput()
+	cmd := exec.CommandContext(ctx, "minikube", "delete", "-p", name)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		if l.stateManager != nil {
-			if clusterState, stateErr := l.stateManager.GetClusterState(ctx, name); stateErr == nil && clusterState != nil {
-				clusterState.Status = "error"
-				clusterState.UpdatedAt = time.Now()
-				l.stateManager.SaveClusterState(ctx, clusterState)
-			}
-		}
-		return fmt.Errorf("failed to delete cluster %s: %s", name, err)
+		return fmt.Errorf("failed to delete cluster %s: %w\nOutput: %s", name, err, string(output))
+	}
+	return nil
+}
+
+// StartCluster starts a stopped minikube cluster
+func (l *LocalProvider) StartCluster(ctx context.Context, name string) error {
+	cmd := exec.CommandContext(ctx, "minikube", "start", "-p", name)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to start cluster %s: %w\nOutput: %s", name, err, string(output))
+	}
+	return nil
+}
+
+// StopCluster stops a running minikube cluster
+func (l *LocalProvider) StopCluster(ctx context.Context, name string) error {
+	cmd := exec.CommandContext(ctx, "minikube", "stop", "-p", name)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to stop cluster %s: %w\nOutput: %s", name, err, string(output))
+	}
+	return nil
+}
+
+// ScaleCluster scales a minikube cluster to the specified number of nodes
+func (l *LocalProvider) ScaleCluster(ctx context.Context, name string, nodeCount int) error {
+	if nodeCount <= 0 {
+		return fmt.Errorf("node count must be positive")
+	}
+	if nodeCount > 10 {
+		return fmt.Errorf("node count cannot exceed 10 for local provider")
 	}
 
-	if l.stateManager != nil {
-		if err := l.stateManager.DeleteClusterState(ctx, name); err != nil {
-			fmt.Printf("warning: failed to clean up cluster state: %v\n", err)
+	currentCluster, err := l.GetCluster(ctx, name)
+	if err != nil {
+		return fmt.Errorf("failed to get current cluster info: %w", err)
+	}
+
+	if currentCluster.NodeCount == nodeCount {
+		return nil 
+	}
+
+	if nodeCount > currentCluster.NodeCount {
+		for i := currentCluster.NodeCount; i < nodeCount; i++ {
+			cmd := exec.CommandContext(ctx, "minikube", "node", "add", "-p", name)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to add node to cluster %s: %w\nOutput: %s", name, err, string(output))
+			}
+		}
+	} else {
+		for i := currentCluster.NodeCount; i > nodeCount; i-- {
+			cmd := exec.CommandContext(ctx, "minikube", "node", "delete", fmt.Sprintf("%s-m%02d", name, i-1), "-p", name)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to remove node from cluster %s: %w\nOutput: %s", name, err, string(output))
+			}
 		}
 	}
 
 	return nil
 }
 
+// GetCluster retrieves information about a minikube cluster
 func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, error) {
-	cmd := exec.Command("minikube", "status", "-p", name)
+	cmd := exec.CommandContext(ctx, "minikube", "status", "-p", name)
 	output, err := cmd.CombinedOutput()
 	statusStr := string(output)
 
@@ -330,7 +210,7 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 		status = ClusterStatusError
 	}
 
-	cmd = exec.Command("minikube", "ip", "-p", name)
+	cmd = exec.CommandContext(ctx, "minikube", "ip", "-p", name)
 	ipOutput, err := cmd.CombinedOutput()
 	var endpoint string
 	if err == nil {
@@ -340,7 +220,7 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 	var version string
 	var nodeCount int = 1
 
-	cmd = exec.Command("minikube", "profile", "list")
+	cmd = exec.CommandContext(ctx, "minikube", "profile", "list")
 	profileOutput, err := cmd.CombinedOutput()
 	if err == nil {
 		lines := strings.Split(string(profileOutput), "\n")
@@ -361,7 +241,7 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 	}
 
 	if version == "" && status == ClusterStatusRunning {
-		cmd = exec.Command("minikube", "kubectl", "-p", name, "--", "version", "--client=false", "--output=yaml")
+		cmd = exec.CommandContext(ctx, "minikube", "kubectl", "-p", name, "--", "version", "--client=false", "--output=yaml")
 		versionOutput, err := cmd.CombinedOutput()
 		if err == nil {
 			lines := strings.Split(string(versionOutput), "\n")
@@ -378,7 +258,7 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 	}
 
 	if status == ClusterStatusRunning {
-		cmd = exec.Command("minikube", "kubectl", "-p", name, "--", "get", "nodes", "--no-headers")
+		cmd = exec.CommandContext(ctx, "minikube", "kubectl", "-p", name, "--", "get", "nodes", "--no-headers")
 		nodesOutput, err := cmd.CombinedOutput()
 		if err == nil {
 			nodeLines := strings.Split(strings.TrimSpace(string(nodesOutput)), "\n")
@@ -396,34 +276,34 @@ func (l *LocalProvider) GetCluster(ctx context.Context, name string) (*Cluster, 
 		Status:    status,
 		NodeCount: nodeCount,
 		Endpoint:  endpoint,
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now(), // We could get this from log source if needed
 		UpdatedAt: time.Now(),
 		Tags:      make(map[string]string),
 	}, nil
 }
 
+// ListClusters lists all minikube clusters managed by this provider
 func (l *LocalProvider) ListClusters(ctx context.Context) ([]*Cluster, error) {
-	cmd := exec.Command("minikube", "profile", "list", "-o=json")
+	cmd := exec.CommandContext(ctx, "minikube", "profile", "list", "-o=json")
 	var profiles MinikubeProfilesResponse
 
 	profileOutput, err := cmd.CombinedOutput()
-
 	if err != nil {
-		return nil, fmt.Errorf("error getting profiles: %s", err)
+		return nil, fmt.Errorf("error getting profiles: %w", err)
 	}
+	
 	if err := json.Unmarshal(profileOutput, &profiles); err != nil {
-		return nil, fmt.Errorf("error unmarshaling profiles: %s", err)
+		return nil, fmt.Errorf("error unmarshaling profiles: %w", err)
 	}
 
 	var clusters []*Cluster
-
 	for _, profile := range profiles.Valid {
 		cluster, err := l.GetCluster(ctx, profile.Name)
 		if err != nil {
 			if strings.Contains(err.Error(), "does not exist") {
 				continue
 			}
-			return nil, fmt.Errorf("error getting cluster %s: %s", profile.Name, err)
+			return nil, fmt.Errorf("error getting cluster %s: %w", profile.Name, err)
 		}
 		clusters = append(clusters, cluster)
 	}
@@ -431,82 +311,7 @@ func (l *LocalProvider) ListClusters(ctx context.Context) ([]*Cluster, error) {
 	return clusters, nil
 }
 
-func (l *LocalProvider) GetProviderName() string {
-	return "local"
-}
-
-func (l *LocalProvider) GetSupportedRegions() []string {
-	return []string{"local"}
-}
-
-func (l *LocalProvider) GetSupportedVersions() []string {
-	return []string{"v1.31.0", "v1.30.0", "v1.29.0", "v1.28.0", "v1.27.0"}
-}
-
-func (l *LocalProvider) ScaleCluster(ctx context.Context, name string, nodeCount int) error {
-	if nodeCount <= 0 {
-		return fmt.Errorf("node count must be positive")
-	}
-	if nodeCount > 10 {
-		return fmt.Errorf("node count cannot exceed 10 for local provider")
-	}
-
-	currentCluster, err := l.GetCluster(ctx, name)
-	if err != nil {
-		return fmt.Errorf("failed to get current cluster info: %w", err)
-	}
-
-	if currentCluster.NodeCount == nodeCount {
-		return nil
-	}
-
-	if l.auditService != nil {
-		opCtx, err := l.auditService.StartOperation(ctx, name, state.OpTypeScale, nil)
-		if err != nil {
-			return fmt.Errorf("failed to start audit operation: %w", err)
-		}
-		defer func() {
-			if opCtx != nil {
-				if err != nil {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusFailed, err.Error())
-				} else {
-					l.auditService.CompleteOperation(ctx, opCtx, state.OpStatusCompleted, "")
-				}
-			}
-		}()
-	}
-
-	if nodeCount > currentCluster.NodeCount {
-		for i := currentCluster.NodeCount; i < nodeCount; i++ {
-			cmd := exec.Command("minikube", "node", "add", "-p", name)
-			if _, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to add node to cluster %s: %s", name, err)
-			}
-		}
-	} else {
-		for i := currentCluster.NodeCount; i > nodeCount; i-- {
-			cmd := exec.Command("minikube", "node", "delete", fmt.Sprintf("%s-m%02d", name, i-1), "-p", name)
-			if _, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to remove node from cluster %s: %s", name, err)
-			}
-		}
-	}
-
-	return nil
-}
-
-func (l *LocalProvider) UpdateCluster(ctx context.Context, name string, config *ClusterConfig) (*Cluster, error) {
-	if err := l.StopCluster(ctx, name); err != nil {
-		return nil, fmt.Errorf("failed to stop cluster for update: %w", err)
-	}
-
-	if err := l.DeleteCluster(ctx, name); err != nil {
-		return nil, fmt.Errorf("failed to delete cluster for update: %w", err)
-	}
-
-	return l.CreateCluster(ctx, config)
-}
-
+// ValidateConfig validates the cluster configuration for the local provider
 func (l *LocalProvider) ValidateConfig(config *ClusterConfig) error {
 	if config.Name == "" {
 		return fmt.Errorf("cluster name is required")
@@ -543,6 +348,110 @@ func (l *LocalProvider) ValidateConfig(config *ClusterConfig) error {
 	return nil
 }
 
+// applyPostCreateConfigs applies post-creation configurations like networking, security, and resources
+func (l *LocalProvider) applyPostCreateConfigs(ctx context.Context, config *ClusterConfig) error {
+	if config.NetworkConfig != nil {
+		if err := l.applyNetworkConfig(ctx, config.Name, config.NetworkConfig); err != nil {
+			return fmt.Errorf("failed to apply network config: %w", err)
+		}
+	}
+
+	if config.SecurityConfig != nil {
+		if err := l.applySecurityConfig(ctx, config.Name, config.SecurityConfig); err != nil {
+			return fmt.Errorf("failed to apply security config: %w", err)
+		}
+	}
+
+	if config.ResourceConfig != nil {
+		if err := l.applyResourceConfig(ctx, config.Name, config.ResourceConfig); err != nil {
+			return fmt.Errorf("failed to apply resource config: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// applyNetworkConfig applies network configuration including ingress and load balancer settings
+func (l *LocalProvider) applyNetworkConfig(ctx context.Context, clusterName string, netConfig *NetworkConfig) error {
+	if netConfig.Ingress != nil && netConfig.Ingress.Enabled {
+		cmd := exec.CommandContext(ctx, "minikube", "addons", "enable", "ingress", "-p", clusterName)
+		if _, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to enable ingress addon: %w", err)
+		}
+		fmt.Printf("Enabled ingress controller for cluster %s\n", clusterName)
+	}
+
+	if netConfig.LoadBalancer != nil && netConfig.LoadBalancer.Enabled {
+		cmd := exec.CommandContext(ctx, "minikube", "addons", "enable", "metallb", "-p", clusterName)
+		if _, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to enable metallb addon: %w", err)
+		}
+		fmt.Printf("Enabled MetalLB load balancer for cluster %s\n", clusterName)
+	}
+
+	return nil
+}
+
+// applySecurityConfig applies security configuration including network policies
+func (l *LocalProvider) applySecurityConfig(ctx context.Context, clusterName string, secConfig *SecurityConfig) error {
+	if secConfig.NetworkPolicy != nil && secConfig.NetworkPolicy.Enabled {
+		networkPolicyYAML := `
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: default
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+`
+		if err := l.applyKubernetesResource(ctx, clusterName, networkPolicyYAML); err != nil {
+			return fmt.Errorf("failed to apply network policy: %w", err)
+		}
+		fmt.Printf("Applied default network policy for cluster %s\n", clusterName)
+	}
+
+	return nil
+}
+
+// applyResourceConfig applies resource configuration including monitoring and storage settings
+func (l *LocalProvider) applyResourceConfig(ctx context.Context, clusterName string, resConfig *ResourceConfig) error {
+	if resConfig.Monitoring != nil && resConfig.Monitoring.Enabled {
+		if resConfig.Monitoring.Prometheus != nil && resConfig.Monitoring.Prometheus.Enabled {
+			cmd := exec.CommandContext(ctx, "minikube", "addons", "enable", "metrics-server", "-p", clusterName)
+			if _, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to enable metrics-server addon: %w", err)
+			}
+			fmt.Printf("Enabled metrics-server for cluster %s\n", clusterName)
+		}
+	}
+
+	if resConfig.Storage != nil {
+		if resConfig.Storage.DefaultStorageClass != "" {
+			cmd := exec.CommandContext(ctx, "minikube", "addons", "enable", "default-storageclass", "-p", clusterName)
+			if _, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to enable default storageclass: %w", err)
+			}
+			fmt.Printf("Enabled default storage class for cluster %s\n", clusterName)
+		}
+	}
+
+	return nil
+}
+
+// applyKubernetesResource applies a YAML resource to the minikube cluster
+func (l *LocalProvider) applyKubernetesResource(ctx context.Context, clusterName, resourceYAML string) error {
+	cmd := exec.CommandContext(ctx, "minikube", "kubectl", "-p", clusterName, "--", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(resourceYAML)
+	if _, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to apply kubernetes resource: %w", err)
+	}
+	return nil
+}
+
+// validateNetworkConfig validates network configuration parameters
 func (l *LocalProvider) validateNetworkConfig(netConfig *NetworkConfig) error {
 	if netConfig == nil {
 		return nil
@@ -592,6 +501,7 @@ func (l *LocalProvider) validateNetworkConfig(netConfig *NetworkConfig) error {
 	return nil
 }
 
+// validateSecurityConfig validates security configuration parameters
 func (l *LocalProvider) validateSecurityConfig(secConfig *SecurityConfig) error {
 	if secConfig == nil {
 		return nil
@@ -642,6 +552,7 @@ func (l *LocalProvider) validateSecurityConfig(secConfig *SecurityConfig) error 
 	return nil
 }
 
+// validateResourceConfig validates resource configuration parameters
 func (l *LocalProvider) validateResourceConfig(resConfig *ResourceConfig) error {
 	if resConfig == nil {
 		return nil
@@ -684,201 +595,5 @@ func (l *LocalProvider) validateResourceConfig(resConfig *ResourceConfig) error 
 	return nil
 }
 
-func (l *LocalProvider) applyPostCreateConfigs(ctx context.Context, config *ClusterConfig) error {
-	if config.NetworkConfig != nil {
-		if err := l.applyNetworkConfig(ctx, config.Name, config.NetworkConfig); err != nil {
-			return fmt.Errorf("failed to apply network config: %w", err)
-		}
-	}
-
-	if config.SecurityConfig != nil {
-		if err := l.applySecurityConfig(ctx, config.Name, config.SecurityConfig); err != nil {
-			return fmt.Errorf("failed to apply security config: %w", err)
-		}
-	}
-
-	if config.ResourceConfig != nil {
-		if err := l.applyResourceConfig(ctx, config.Name, config.ResourceConfig); err != nil {
-			return fmt.Errorf("failed to apply resource config: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func (l *LocalProvider) applyNetworkConfig(ctx context.Context, clusterName string, netConfig *NetworkConfig) error {
-	if netConfig.Ingress != nil && netConfig.Ingress.Enabled {
-		cmd := exec.Command("minikube", "addons", "enable", "ingress", "-p", clusterName)
-		if _, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to enable ingress addon: %w", err)
-		}
-		fmt.Printf("Enabled ingress controller for cluster %s\n", clusterName)
-
-		if l.stateManager != nil {
-			resource := &state.Resource{
-				ID:          clusterName + "-ingress",
-				ClusterName: clusterName,
-				Type:        "addon",
-				Name:        "ingress",
-				Status:      "enabled",
-				Config: map[string]any{
-					"controller": netConfig.Ingress.Controller,
-					"enabled":    true,
-				},
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
-			}
-			l.stateManager.SaveResource(ctx, resource)
-		}
-	}
-
-	if netConfig.LoadBalancer != nil && netConfig.LoadBalancer.Enabled {
-		cmd := exec.Command("minikube", "addons", "enable", "metallb", "-p", clusterName)
-		if _, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to enable metallb addon: %w", err)
-		}
-		fmt.Printf("Enabled MetalLB load balancer for cluster %s\n", clusterName)
-
-		if l.stateManager != nil {
-			resource := &state.Resource{
-				ID:          clusterName + "-metallb",
-				ClusterName: clusterName,
-				Type:        "addon",
-				Name:        "metallb",
-				Status:      "enabled",
-				Config: map[string]any{
-					"type":    netConfig.LoadBalancer.Type,
-					"enabled": true,
-				},
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
-			}
-			l.stateManager.SaveResource(ctx, resource)
-		}
-	}
-
-	return nil
-}
-
-func (l *LocalProvider) applySecurityConfig(ctx context.Context, clusterName string, secConfig *SecurityConfig) error {
-	if secConfig.NetworkPolicy != nil && secConfig.NetworkPolicy.Enabled {
-		networkPolicyYAML := `
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: default-deny-all
-  namespace: default
-spec:
-  podSelector: {}
-  policyTypes:
-  - Ingress
-  - Egress
-`
-		if err := l.applyKubernetesResource(clusterName, networkPolicyYAML); err != nil {
-			return fmt.Errorf("failed to apply network policy: %w", err)
-		}
-		fmt.Printf("Applied default network policy for cluster %s\n", clusterName)
-	}
-
-	if secConfig.PodSecurityPolicy != nil && secConfig.PodSecurityPolicy.Enabled {
-		pspYAML := `
-apiVersion: policy/v1beta1
-kind: PodSecurityPolicy
-metadata:
-  name: restricted
-spec:
-  privileged: false
-  allowPrivilegeEscalation: false
-  requiredDropCapabilities:
-    - ALL
-  volumes:
-    - 'configMap'
-    - 'emptyDir'
-    - 'projected'
-    - 'secret'
-    - 'downwardAPI'
-    - 'persistentVolumeClaim'
-  runAsUser:
-    rule: 'MustRunAsNonRoot'
-  seLinux:
-    rule: 'RunAsAny'
-  fsGroup:
-    rule: 'RunAsAny'
-`
-		if err := l.applyKubernetesResource(clusterName, pspYAML); err != nil {
-			return fmt.Errorf("failed to apply pod security policy: %w", err)
-		}
-		fmt.Printf("Applied pod security policy for cluster %s\n", clusterName)
-	}
-
-	return nil
-}
-
-func (l *LocalProvider) applyResourceConfig(ctx context.Context, clusterName string, resConfig *ResourceConfig) error {
-	if resConfig.Monitoring != nil && resConfig.Monitoring.Enabled {
-		if resConfig.Monitoring.Prometheus != nil && resConfig.Monitoring.Prometheus.Enabled {
-			cmd := exec.Command("minikube", "addons", "enable", "metrics-server", "-p", clusterName)
-			if _, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to enable metrics-server addon: %w", err)
-			}
-			fmt.Printf("Enabled metrics-server for cluster %s\n", clusterName)
-		}
-	}
-
-	if resConfig.Storage != nil {
-		if resConfig.Storage.DefaultStorageClass != "" {
-			cmd := exec.Command("minikube", "addons", "enable", "default-storageclass", "-p", clusterName)
-			if _, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to enable default storageclass: %w", err)
-			}
-			fmt.Printf("Enabled default storage class for cluster %s\n", clusterName)
-		}
-		if resConfig.Storage.VolumeExpansion {
-			cmd := exec.Command("minikube", "addons", "enable", "volumesnapshots", "-p", clusterName)
-			if _, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to enable volume snapshots: %w", err)
-			}
-			fmt.Printf("Enabled volume snapshots for cluster %s\n", clusterName)
-		}
-	}
-
-	if resConfig.Quotas != nil && resConfig.Quotas.DefaultQuota != nil {
-		quotaYAML := fmt.Sprintf(`
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: default-quota
-  namespace: default
-spec:
-  hard:
-    requests.cpu: "%s"
-    requests.memory: "%s"
-    requests.storage: "%s"
-    persistentvolumeclaims: "%d"
-    pods: "%d"
-`,
-			resConfig.Quotas.DefaultQuota.CPU,
-			resConfig.Quotas.DefaultQuota.Memory,
-			resConfig.Quotas.DefaultQuota.Storage,
-			resConfig.Quotas.DefaultQuota.PVCs,
-			resConfig.Quotas.DefaultQuota.Pods)
-
-		if err := l.applyKubernetesResource(clusterName, quotaYAML); err != nil {
-			return fmt.Errorf("failed to apply resource quota: %w", err)
-		}
-		fmt.Printf("Applied default resource quota for cluster %s\n", clusterName)
-	}
-
-	return nil
-}
-
-func (l *LocalProvider) applyKubernetesResource(clusterName, resourceYAML string) error {
-	cmd := exec.Command("minikube", "kubectl", "-p", clusterName, "--", "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(resourceYAML)
-	if _, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to apply kubernetes resource: %w", err)
-	}
-	return nil
-}
-
+// Ensure LocalProvider implements Provider interface
 var _ Provider = (*LocalProvider)(nil)

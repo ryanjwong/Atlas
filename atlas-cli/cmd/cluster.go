@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/providers"
 	"github.com/spf13/cobra"
@@ -350,8 +349,8 @@ var clusterScaleCmd = &cobra.Command{
 
 var clusterStatusCmd = &cobra.Command{
 	Use:   "status [name]",
-	Short: "Show detailed cluster status",
-	Long:  `Show detailed status including state information and resources for a cluster.`,
+	Short: "Show cluster status",
+	Long:  `Show current status of a cluster.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		services := GetServices()
@@ -360,149 +359,36 @@ var clusterStatusCmd = &cobra.Command{
 		}
 
 		clusterName := args[0]
-		stateManager := services.GetStateManager()
-
-		clusterState, err := stateManager.GetClusterState(context.Background(), clusterName)
-		if err != nil {
-			return fmt.Errorf("failed to get cluster state: %w", err)
-		}
-
 		p := services.GetLocalProvider()
-		actualCluster, providerErr := p.GetCluster(context.Background(), clusterName)
-
-		syncFlag, _ := cmd.Flags().GetBool("sync")
-
-		if clusterState == nil && providerErr != nil {
-			return fmt.Errorf("cluster '%s' not found in state database or provider", clusterName)
-		}
-
-		if clusterState == nil && actualCluster != nil {
-			if services.GetOutput() == "json" {
-				jsonOutput, err := json.MarshalIndent(actualCluster, "", "  ")
-				if err != nil {
-					return fmt.Errorf("failed to marshal cluster: %w", err)
-				}
-				fmt.Println(string(jsonOutput))
-			} else {
-				fmt.Printf("Cluster: %s (not tracked in DB)\n", clusterName)
-				fmt.Printf("Provider: %s\n", actualCluster.Provider)
-				fmt.Printf("Status: %s\n", actualCluster.Status)
-				fmt.Printf("Nodes: %d\n", actualCluster.NodeCount)
-				fmt.Printf("Version: %s\n", actualCluster.Version)
-			}
-			return nil
-		}
-
-		if clusterState != nil && providerErr != nil {
-			if services.GetOutput() == "json" {
-				jsonOutput, err := json.MarshalIndent(clusterState, "", "  ")
-				if err != nil {
-					return fmt.Errorf("failed to marshal cluster state: %w", err)
-				}
-				fmt.Println(string(jsonOutput))
-			} else {
-				fmt.Printf("Cluster: %s (exists in database but not found in provider - may have been deleted externally)\n", clusterName)
-				fmt.Printf("Database Status: %s\n", clusterState.Status)
-				fmt.Printf("Created: %s\n", clusterState.CreatedAt.Format("2006-01-02 15:04:05"))
-				fmt.Printf("Last Updated: %s\n", clusterState.UpdatedAt.Format("2006-01-02 15:04:05"))
-			}
-			return nil
-		}
-
-		if clusterState != nil && actualCluster != nil {
-			driftDetected := false
-			var driftMessages []string
-
-			if clusterState.Status != string(actualCluster.Status) {
-				driftDetected = true
-				driftMessages = append(driftMessages, fmt.Sprintf("Status: DB='%s' vs Actual='%s'",
-					clusterState.Status, actualCluster.Status))
-			}
-
-			if clusterState.NodeCount != actualCluster.NodeCount {
-				driftDetected = true
-				driftMessages = append(driftMessages, fmt.Sprintf("Nodes: DB=%d vs Actual=%d",
-					clusterState.NodeCount, actualCluster.NodeCount))
-			}
-
-			if clusterState.Version != actualCluster.Version && actualCluster.Version != "" {
-				driftDetected = true
-				driftMessages = append(driftMessages, fmt.Sprintf("Version: DB='%s' vs Actual='%s'",
-					clusterState.Version, actualCluster.Version))
-			}
-
-			if driftDetected {
-				if !syncFlag {
-					fmt.Printf("Drift detected between database and actual cluster state:\n")
-					for _, msg := range driftMessages {
-						fmt.Printf("   %s\n", msg)
-					}
-					fmt.Printf("Use --sync flag to synchronize database with actual state\n\n")
-				} else {
-					fmt.Printf("Synchronizing database with actual cluster state...\n")
-					clusterState.Status = string(actualCluster.Status)
-					clusterState.NodeCount = actualCluster.NodeCount
-					if actualCluster.Version != "" {
-						clusterState.Version = actualCluster.Version
-					}
-					clusterState.UpdatedAt = time.Now()
-
-					err = stateManager.SaveClusterState(context.Background(), clusterState)
-					if err != nil {
-						return fmt.Errorf("failed to sync database state: %w", err)
-					}
-					fmt.Printf("Database synchronized successfully\n\n")
-				}
-			}
+		actualCluster, err := p.GetCluster(context.Background(), clusterName)
+		if err != nil {
+			return fmt.Errorf("failed to get cluster status: %w", err)
 		}
 
 		if services.GetOutput() == "json" {
-			jsonOutput, err := json.MarshalIndent(clusterState, "", "  ")
+			jsonOutput, err := json.MarshalIndent(actualCluster, "", "  ")
 			if err != nil {
-				return fmt.Errorf("failed to marshal cluster state: %w", err)
+				return fmt.Errorf("failed to marshal cluster: %w", err)
 			}
 			fmt.Println(string(jsonOutput))
 		} else {
-			fmt.Printf("Cluster: %s\n", clusterState.Name)
-			fmt.Printf("Provider: %s\n", clusterState.Provider)
-			fmt.Printf("Region: %s\n", clusterState.Region)
-			fmt.Printf("Status: %s\n", clusterState.Status)
-			fmt.Printf("Nodes: %d\n", clusterState.NodeCount)
-			fmt.Printf("Version: %s\n", clusterState.Version)
-			fmt.Printf("Created: %s\n", clusterState.CreatedAt.Format("2006-01-02 15:04:05"))
-			fmt.Printf("Updated: %s\n", clusterState.UpdatedAt.Format("2006-01-02 15:04:05"))
-			fmt.Printf("Created by: %s\n", clusterState.CreatedBy)
-
-			if len(clusterState.Metadata) > 0 {
-				fmt.Printf("\nMetadata:\n")
-				for key, value := range clusterState.Metadata {
-					fmt.Printf("  %s: %s\n", key, value)
-				}
-			}
-
-			if len(clusterState.Resources) > 0 {
-				fmt.Printf("\nResources:\n")
-				for _, resource := range clusterState.Resources {
-					fmt.Printf("  %s (%s): %s\n", resource.Name, resource.Type, resource.Status)
-				}
-			}
-
-			showConfig, _ := cmd.Flags().GetBool("show-config")
-			if showConfig && len(clusterState.Config) > 0 {
-				fmt.Printf("\nConfiguration:\n")
-				configJSON, _ := json.MarshalIndent(clusterState.Config, "  ", "  ")
-				fmt.Printf("  %s\n", string(configJSON))
-			}
+			fmt.Printf("Cluster: %s\n", clusterName)
+			fmt.Printf("Provider: %s\n", actualCluster.Provider)
+			fmt.Printf("Status: %s\n", actualCluster.Status)
+			fmt.Printf("Nodes: %d\n", actualCluster.NodeCount)
+			fmt.Printf("Version: %s\n", actualCluster.Version)
+			fmt.Printf("Endpoint: %s\n", actualCluster.Endpoint)
 		}
 
 		return nil
 	},
 }
 
+
 var clusterHistoryCmd = &cobra.Command{
 	Use:   "history [name]",
 	Short: "Show cluster operation history",
-	Long:  `Show the history of operations performed on a cluster.`,
+	Long:  `Show the history of operations performed on a cluster from minikube's audit logs.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		services := GetServices()
@@ -511,12 +397,16 @@ var clusterHistoryCmd = &cobra.Command{
 		}
 
 		clusterName := args[0]
-		stateManager := services.GetStateManager()
 		limit, _ := cmd.Flags().GetInt("limit")
-		operationHistory, err := stateManager.GetOperationHistory(context.Background(), clusterName, limit)
+		
+		provider := services.GetLocalProvider()
+		logSource := provider.GetLogSource()
+		
+		operationHistory, err := logSource.GetClusterHistory(context.Background(), clusterName, limit)
 		if err != nil {
-			return fmt.Errorf("failed to get operation history: %w", err)
+			return fmt.Errorf("failed to get cluster history: %w", err)
 		}
+
 		if services.GetOutput() == "json" {
 			jsonOutput, err := json.MarshalIndent(operationHistory, "", "  ")
 			if err != nil {
@@ -527,28 +417,21 @@ var clusterHistoryCmd = &cobra.Command{
 		}
 
 		if len(operationHistory) == 0 {
-			fmt.Println("No operations found")
+			fmt.Printf("No operations found for cluster '%s'\n", clusterName)
 			return nil
 		}
 
-		fmt.Printf("History for cluster '%s':\n", clusterName)
-		fmt.Printf("%-20s %-10s %-12s %-12s %-15s %-s\n", "STARTED", "TYPE", "STATUS", "USER", "DURATION", "ERROR")
-		fmt.Printf("%-20s %-10s %-12s %-12s %-15s %-s\n", "--------------------", "----------", "------------", "------------", "---------------", "-----")
+		fmt.Printf("Operation History for '%s' (%d operations):\n\n", clusterName, len(operationHistory))
+		fmt.Printf("%-20s %-8s %-10s %-12s\n", "STARTED", "TYPE", "STATUS", "USER")
+		fmt.Printf("%-20s %-8s %-10s %-12s\n", "----", "----", "----", "----")
+
 		for _, op := range operationHistory {
-			started := op.StartedAt.Format("2006-01-02 15:04:05")
-			duration := "-"
-			if op.DurationMS != nil {
-				duration = fmt.Sprintf("%fms", *op.DurationMS)
-			}
-			fmt.Printf(
-				"%-20s %-10s %-12s %-12s %-10s %-s\n",
+			started := op.StartedAt.Format("Jan 02 15:04:05")
+			fmt.Printf("%-20s %-8s %-10s %-12s\n",
 				started,
 				string(op.OperationType),
 				string(op.OperationStatus),
-				op.UserID,
-				duration,
-				op.ErrorMessage,
-			)
+				op.UserID)
 		}
 
 		return nil
@@ -722,8 +605,5 @@ func init() {
 
 	clusterGenerateConfigCmd.Flags().StringP("output", "o", "", "Output file path (default: stdout)")
 
-	clusterStatusCmd.Flags().Bool("show-config", false, "Show full cluster configuration")
-	clusterStatusCmd.Flags().Bool("sync", false, "Synchronize database state with actual cluster state")
-
-	clusterHistoryCmd.Flags().IntP("limit", "l", 50, "Number of audit logs to display")
+	clusterHistoryCmd.Flags().IntP("limit", "l", 50, "Number of operations to display")
 }

@@ -4,16 +4,12 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/ryanjwong/Atlas/atlas-cli/pkg/audit"
-	"github.com/ryanjwong/Atlas/atlas-cli/pkg/state"
 )
 
 func TestLocalProvider_ValidateConfig(t *testing.T) {
-	provider := &LocalProvider{}
+	provider := NewLocalProvider()
 
 	tests := []struct {
 		name        string
@@ -302,14 +298,14 @@ func TestLocalProvider_ValidateConfig(t *testing.T) {
 }
 
 func TestLocalProvider_GetProviderName(t *testing.T) {
-	provider := &LocalProvider{}
+	provider := NewLocalProvider()
 	if got := provider.GetProviderName(); got != "local" {
 		t.Errorf("GetProviderName() = %v, want %v", got, "local")
 	}
 }
 
 func TestLocalProvider_GetSupportedRegions(t *testing.T) {
-	provider := &LocalProvider{}
+	provider := NewLocalProvider()
 	regions := provider.GetSupportedRegions()
 	if len(regions) == 0 {
 		t.Error("GetSupportedRegions() should return at least one region")
@@ -320,7 +316,7 @@ func TestLocalProvider_GetSupportedRegions(t *testing.T) {
 }
 
 func TestLocalProvider_GetSupportedVersions(t *testing.T) {
-	provider := &LocalProvider{}
+	provider := NewLocalProvider()
 	versions := provider.GetSupportedVersions()
 	if len(versions) == 0 {
 		t.Error("GetSupportedVersions() should return at least one version")
@@ -328,7 +324,7 @@ func TestLocalProvider_GetSupportedVersions(t *testing.T) {
 }
 
 func TestNetworkConfigValidation(t *testing.T) {
-	provider := &LocalProvider{}
+	provider := NewLocalProvider()
 
 	tests := []struct {
 		name        string
@@ -403,227 +399,6 @@ func TestNetworkConfigValidation(t *testing.T) {
 	}
 }
 
-// Integration tests with state manager
-func TestLocalProvider_WithStateManager(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration tests in short mode")
-	}
-
-	if !isMinikubeAvailable() {
-		t.Skip("minikube not available")
-	}
-
-	tmpDir, err := os.MkdirTemp("", "atlas-provider-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	stateManager, err := state.NewSQLiteStateManager(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create state manager: %v", err)
-	}
-	defer stateManager.Disconnect(context.Background())
-
-	auditService := audit.NewAuditService(stateManager)
-
-	provider := NewLocalProvider(stateManager, auditService)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	testCluster := "atlas-state-test"
-
-	defer func() {
-		provider.DeleteCluster(ctx, testCluster)
-	}()
-
-	t.Run("CreateClusterWithState", func(t *testing.T) {
-		config := &ClusterConfig{
-			Name:      testCluster,
-			NodeCount: 1,
-			Version:   "v1.31.0",
-			Region:    "local",
-		}
-
-		cluster, err := provider.CreateCluster(ctx, config)
-		if err != nil {
-			t.Fatalf("CreateCluster() error = %v", err)
-		}
-
-		if cluster.Name != testCluster {
-			t.Errorf("CreateCluster() cluster name = %v, want %v", cluster.Name, testCluster)
-		}
-
-		clusterState, err := stateManager.GetClusterState(ctx, testCluster)
-		if err != nil {
-			t.Fatalf("GetClusterState() error = %v", err)
-		}
-
-		if clusterState == nil {
-			t.Fatal("GetClusterState() returned nil - state not saved")
-		}
-
-		if clusterState.Status != "running" {
-			t.Errorf("GetClusterState() status = %v, want %v", clusterState.Status, "running")
-		}
-
-		if clusterState.NodeCount != 1 {
-			t.Errorf("GetClusterState() nodeCount = %v, want %v", clusterState.NodeCount, 1)
-		}
-	})
-
-	t.Run("StopClusterWithState", func(t *testing.T) {
-		err := provider.StopCluster(ctx, testCluster)
-		if err != nil {
-			t.Fatalf("StopCluster() error = %v", err)
-		}
-
-		clusterState, err := stateManager.GetClusterState(ctx, testCluster)
-		if err != nil {
-			t.Fatalf("GetClusterState() after stop error = %v", err)
-		}
-
-		if clusterState.Status != "stopped" {
-			t.Errorf("GetClusterState() after stop status = %v, want %v", clusterState.Status, "stopped")
-		}
-	})
-
-	t.Run("StartClusterWithState", func(t *testing.T) {
-		err := provider.StartCluster(ctx, testCluster)
-		if err != nil {
-			t.Fatalf("StartCluster() error = %v", err)
-		}
-
-		clusterState, err := stateManager.GetClusterState(ctx, testCluster)
-		if err != nil {
-			t.Fatalf("GetClusterState() after start error = %v", err)
-		}
-
-		if clusterState.Status != "running" {
-			t.Errorf("GetClusterState() after start status = %v, want %v", clusterState.Status, "running")
-		}
-	})
-
-	t.Run("DeleteClusterWithState", func(t *testing.T) {
-		err := provider.DeleteCluster(ctx, testCluster)
-		if err != nil {
-			t.Fatalf("DeleteCluster() error = %v", err)
-		}
-
-		clusterState, err := stateManager.GetClusterState(ctx, testCluster)
-		if err != nil {
-			t.Fatalf("GetClusterState() after delete error = %v", err)
-		}
-
-		if clusterState != nil {
-			t.Error("GetClusterState() after delete should return nil - state not removed")
-		}
-	})
-}
-
-func TestLocalProvider_WithStateManager_NetworkConfig(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration tests in short mode")
-	}
-
-	if !isMinikubeAvailable() {
-		t.Skip("minikube not available")
-	}
-
-	tmpDir, err := os.MkdirTemp("", "atlas-network-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	stateManager, err := state.NewSQLiteStateManager(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create state manager: %v", err)
-	}
-	defer stateManager.Disconnect(context.Background())
-
-	auditService := audit.NewAuditService(stateManager)
-
-	provider := NewLocalProvider(stateManager, auditService)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
-
-	testCluster := "atlas-network-test"
-
-	defer func() {
-		provider.DeleteCluster(ctx, testCluster)
-	}()
-
-	t.Run("CreateClusterWithNetworkConfig", func(t *testing.T) {
-		config := &ClusterConfig{
-			Name:      testCluster,
-			NodeCount: 1,
-			Version:   "v1.31.0",
-			Region:    "local",
-			NetworkConfig: &NetworkConfig{
-				Ingress: &IngressConfig{
-					Enabled:    true,
-					Controller: "nginx",
-				},
-				LoadBalancer: &LoadBalancerConfig{
-					Enabled: true,
-					Type:    "metallb",
-				},
-			},
-		}
-
-		cluster, err := provider.CreateCluster(ctx, config)
-		if err != nil {
-			t.Fatalf("CreateCluster() with network config error = %v", err)
-		}
-
-		if cluster.Name != testCluster {
-			t.Errorf("CreateCluster() cluster name = %v, want %v", cluster.Name, testCluster)
-		}
-
-		clusterState, err := stateManager.GetClusterState(ctx, testCluster)
-		if err != nil {
-			t.Fatalf("GetClusterState() error = %v", err)
-		}
-
-		if clusterState == nil {
-			t.Fatal("GetClusterState() returned nil - state not saved")
-		}
-
-		resources, err := stateManager.ListResources(ctx, testCluster)
-		if err != nil {
-			t.Fatalf("ListResources() error = %v", err)
-		}
-
-		// We should have ingress and metallb resources
-		ingressFound := false
-		metallbFound := false
-		for _, resource := range resources {
-			if resource.Name == "ingress" && resource.Type == "addon" {
-				ingressFound = true
-				if resource.Status != "enabled" {
-					t.Errorf("Ingress resource status = %v, want %v", resource.Status, "enabled")
-				}
-			}
-			if resource.Name == "metallb" && resource.Type == "addon" {
-				metallbFound = true
-				if resource.Status != "enabled" {
-					t.Errorf("MetalLB resource status = %v, want %v", resource.Status, "enabled")
-				}
-			}
-		}
-
-		if !ingressFound {
-			t.Error("Ingress resource should be tracked in state")
-		}
-		if !metallbFound {
-			t.Error("MetalLB resource should be tracked in state")
-		}
-	})
-}
-
 // Integration tests that require minikube
 func TestLocalProvider_Integration(t *testing.T) {
 	if testing.Short() {
@@ -634,7 +409,7 @@ func TestLocalProvider_Integration(t *testing.T) {
 		t.Skip("minikube not available")
 	}
 
-	provider := &LocalProvider{}
+	provider := NewLocalProvider()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -713,7 +488,7 @@ func TestLocalProvider_Integration(t *testing.T) {
 
 // Benchmark tests
 func BenchmarkLocalProvider_ValidateConfig(b *testing.B) {
-	provider := &LocalProvider{}
+	provider := NewLocalProvider()
 	config := &ClusterConfig{
 		Name:      "benchmark-cluster",
 		NodeCount: 2,

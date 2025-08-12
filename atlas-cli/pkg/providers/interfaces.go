@@ -3,25 +3,31 @@ package providers
 import (
 	"context"
 	"time"
+
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/logsource"
 )
 
 // Provider defines the interface for providers
 type Provider interface {
-	// Cluster operations
+	// Cluster lifecycle operations (these will be logged by the provider's log source)
 	CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error)
-	GetCluster(ctx context.Context, name string) (*Cluster, error)
-	ListClusters(ctx context.Context) ([]*Cluster, error)
-	UpdateCluster(ctx context.Context, name string, config *ClusterConfig) (*Cluster, error)
 	DeleteCluster(ctx context.Context, name string) error
-	ScaleCluster(ctx context.Context, name string, nodeCount int) error
 	StartCluster(ctx context.Context, name string) error
 	StopCluster(ctx context.Context, name string) error
+	ScaleCluster(ctx context.Context, name string, nodeCount int) error
 
-	// Provider-specific operations
+	// Read operations (these read directly from the provider)
+	GetCluster(ctx context.Context, name string) (*Cluster, error)
+	ListClusters(ctx context.Context) ([]*Cluster, error)
+
+	// Provider metadata
 	GetProviderName() string
 	ValidateConfig(config *ClusterConfig) error
 	GetSupportedRegions() []string
 	GetSupportedVersions() []string
+
+	// Log source for operation history and cluster information
+	GetLogSource() logsource.LogSource
 }
 
 // ClusterConfig represents cluster configuration

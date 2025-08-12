@@ -22,11 +22,7 @@ var rootCmd = &cobra.Command{
 	Long:    `Atlas CLI is a command line interface that automates your entire software development lifecycle.`,
 	Version: version,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		var err error
-		svc, err = services.NewServices(verbose, output, version, "./state.db")
-		if err != nil {
-			panic(err)
-		}
+		svc = services.NewServices(verbose, output, version)
 		return nil
 	},
 }
