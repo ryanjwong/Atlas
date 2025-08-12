@@ -1,5 +1,4 @@
 *.db
 *.out
-**/*.go
 .DS_Store
 atlas

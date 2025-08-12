@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/providers"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var clusterCmd = &cobra.Command{
@@ -29,9 +31,80 @@ var clusterCreateCmd = &cobra.Command{
 		clusterName := args[0]
 		services.Log(fmt.Sprintf("Creating cluster: %s", clusterName))
 
+		configFile, _ := cmd.Flags().GetString("config")
+		var config *providers.ClusterConfig
+
+		if configFile != "" {
+			var err error
+			config, err = loadClusterConfig(configFile)
+			if err != nil {
+				return fmt.Errorf("failed to load config file: %w", err)
+			}
+			config.Name = clusterName
+		} else {
+			region, _ := cmd.Flags().GetString("region")
+			nodeCount, _ := cmd.Flags().GetInt("nodes")
+			version, _ := cmd.Flags().GetString("version")
+			instanceType, _ := cmd.Flags().GetString("instance-type")
+
+			config = &providers.ClusterConfig{
+				Name:         clusterName,
+				Region:       region,
+				NodeCount:    nodeCount,
+				Version:      version,
+				InstanceType: instanceType,
+			}
+
+			enableIngress, _ := cmd.Flags().GetBool("enable-ingress")
+			enableLoadBalancer, _ := cmd.Flags().GetBool("enable-load-balancer")
+			enableRBAC, _ := cmd.Flags().GetBool("enable-rbac")
+			enableNetworkPolicy, _ := cmd.Flags().GetBool("enable-network-policy")
+			enableMonitoring, _ := cmd.Flags().GetBool("enable-monitoring")
+			apiServerPort, _ := cmd.Flags().GetInt("api-server-port")
+			cpuLimit, _ := cmd.Flags().GetString("cpu-limit")
+			memoryLimit, _ := cmd.Flags().GetString("memory-limit")
+
+			if enableIngress || enableLoadBalancer || apiServerPort > 0 {
+				config.NetworkConfig = &providers.NetworkConfig{}
+				if enableIngress {
+					config.NetworkConfig.Ingress = &providers.IngressConfig{Enabled: true}
+				}
+				if enableLoadBalancer {
+					config.NetworkConfig.LoadBalancer = &providers.LoadBalancerConfig{Enabled: true}
+				}
+				if apiServerPort > 0 {
+					config.NetworkConfig.APIServerPort = apiServerPort
+				}
+			}
+
+			if enableRBAC || enableNetworkPolicy {
+				config.SecurityConfig = &providers.SecurityConfig{}
+				if enableRBAC {
+					config.SecurityConfig.RBAC = &providers.RBACConfig{Enabled: true}
+				}
+				if enableNetworkPolicy {
+					config.SecurityConfig.NetworkPolicy = &providers.NetworkPolicyConfig{Enabled: true}
+				}
+			}
+
+			if enableMonitoring || cpuLimit != "" || memoryLimit != "" {
+				config.ResourceConfig = &providers.ResourceConfig{}
+				if enableMonitoring {
+					config.ResourceConfig.Monitoring = &providers.MonitoringConfig{
+						Enabled: true,
+						Prometheus: &providers.PrometheusConfig{Enabled: true},
+					}
+				}
+				if cpuLimit != "" || memoryLimit != "" {
+					config.ResourceConfig.Limits = &providers.ResourceLimits{
+						CPU:    cpuLimit,
+						Memory: memoryLimit,
+					}
+				}
+			}
+		}
+
 		provider, _ := cmd.Flags().GetString("provider")
-		region, _ := cmd.Flags().GetString("region")
-		nodeCount, _ := cmd.Flags().GetInt("nodes")
 		var p providers.Provider
 		switch provider {
 		case "local":
@@ -41,11 +114,11 @@ var clusterCreateCmd = &cobra.Command{
 			return fmt.Errorf("unsupported provider: %s", provider)
 		}
 
-		_, err := p.CreateCluster(context.Background(), &providers.ClusterConfig{
-			Name:      clusterName,
-			Region:    region,
-			NodeCount: nodeCount,
-		})
+		if err := p.ValidateConfig(config); err != nil {
+			return fmt.Errorf("configuration validation failed: %w", err)
+		}
+
+		_, err := p.CreateCluster(context.Background(), config)
 		if err != nil {
 			return fmt.Errorf("failed to create cluster: %w", err)
 		}
@@ -280,6 +353,138 @@ var clusterScaleCmd = &cobra.Command{
 	},
 }
 
+func loadClusterConfig(configFile string) (*providers.ClusterConfig, error) {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var config providers.ClusterConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML config: %w", err)
+	}
+
+	return &config, nil
+}
+
+var clusterGenerateConfigCmd = &cobra.Command{
+	Use:   "generate-config [name]",
+	Short: "Generate a sample configuration file",
+	Long:  `Generate a sample YAML configuration file for creating clusters with advanced options.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		clusterName := args[0]
+		outputFile, _ := cmd.Flags().GetString("output")
+
+		sampleConfig := &providers.ClusterConfig{
+			Name:         clusterName,
+			Region:       "local",
+			Version:      "v1.31.0",
+			NodeCount:    2,
+			InstanceType: "standard",
+			NetworkConfig: &providers.NetworkConfig{
+				PodCIDR:       "10.244.0.0/16",
+				ServiceCIDR:   "10.96.0.0/12",
+				APIServerPort: 8443,
+				NetworkPlugin: "auto",
+				Ingress: &providers.IngressConfig{
+					Enabled:    true,
+					Controller: "nginx",
+				},
+				LoadBalancer: &providers.LoadBalancerConfig{
+					Enabled: true,
+					Type:    "metallb",
+				},
+			},
+			SecurityConfig: &providers.SecurityConfig{
+				RBAC: &providers.RBACConfig{
+					Enabled: true,
+				},
+				NetworkPolicy: &providers.NetworkPolicyConfig{
+					Enabled:       true,
+					DefaultPolicy: "deny-all",
+				},
+				AuditLogging: &providers.AuditConfig{
+					Enabled:  true,
+					LogLevel: "2",
+				},
+				ImageSecurity: &providers.ImageSecurityConfig{
+					ScanEnabled:            true,
+					VulnerabilityThreshold: "medium",
+				},
+			},
+			ResourceConfig: &providers.ResourceConfig{
+				Limits: &providers.ResourceLimits{
+					CPU:    "4",
+					Memory: "8Gi",
+				},
+				Quotas: &providers.ResourceQuotas{
+					DefaultQuota: &providers.NamespaceQuota{
+						CPU:     "2",
+						Memory:  "4Gi",
+						Storage: "10Gi",
+						Pods:    10,
+						PVCs:    5,
+					},
+				},
+				AutoScaling: &providers.AutoScalingConfig{
+					Enabled:   true,
+					MinNodes:  1,
+					MaxNodes:  5,
+					TargetCPU: 70,
+				},
+				Monitoring: &providers.MonitoringConfig{
+					Enabled: true,
+					Prometheus: &providers.PrometheusConfig{
+						Enabled:        true,
+						Retention:      "15d",
+						StorageSize:    "5Gi",
+						ScrapeInterval: "30s",
+					},
+					Grafana: &providers.GrafanaConfig{
+						Enabled:     true,
+						AdminUser:   "admin",
+						Persistence: true,
+					},
+				},
+				Storage: &providers.StorageConfig{
+					DefaultStorageClass: "hostpath",
+					VolumeExpansion:     true,
+					SnapshotController:  true,
+					StorageClasses: []providers.StorageClassConfig{
+						{
+							Name:        "fast",
+							Provisioner: "hostpath",
+							Default:     false,
+						},
+					},
+				},
+			},
+			Tags: map[string]string{
+				"environment": "development",
+				"team":        "platform",
+				"purpose":     "testing",
+			},
+		}
+
+		yamlData, err := yaml.Marshal(sampleConfig)
+		if err != nil {
+			return fmt.Errorf("failed to marshal config to YAML: %w", err)
+		}
+
+		if outputFile != "" {
+			if err := os.WriteFile(outputFile, yamlData, 0644); err != nil {
+				return fmt.Errorf("failed to write config file: %w", err)
+			}
+			fmt.Printf("Sample configuration written to %s\n", outputFile)
+		} else {
+			fmt.Print(string(yamlData))
+		}
+
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(clusterCmd)
 	clusterCmd.AddCommand(clusterCreateCmd)
@@ -288,13 +493,28 @@ func init() {
 	clusterCmd.AddCommand(clusterStartCmd)
 	clusterCmd.AddCommand(clusterStopCmd)
 	clusterCmd.AddCommand(clusterScaleCmd)
+	clusterCmd.AddCommand(clusterGenerateConfigCmd)
 
 	clusterCreateCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
-	clusterCreateCmd.Flags().StringP("region", "r", "us-west-2", "Region to create cluster in")
+	clusterCreateCmd.Flags().StringP("region", "r", "local", "Region to create cluster in")
 	clusterCreateCmd.Flags().IntP("nodes", "n", 1, "Number of nodes in the cluster")
+	clusterCreateCmd.Flags().StringP("version", "k", "", "Kubernetes version")
+	clusterCreateCmd.Flags().String("instance-type", "", "Instance type for nodes")
+	clusterCreateCmd.Flags().StringP("config", "c", "", "Path to cluster configuration YAML file")
+	
+	clusterCreateCmd.Flags().Bool("enable-ingress", false, "Enable ingress controller")
+	clusterCreateCmd.Flags().Bool("enable-load-balancer", false, "Enable load balancer")
+	clusterCreateCmd.Flags().Bool("enable-rbac", false, "Enable RBAC")
+	clusterCreateCmd.Flags().Bool("enable-network-policy", false, "Enable network policies")
+	clusterCreateCmd.Flags().Bool("enable-monitoring", false, "Enable monitoring stack")
+	clusterCreateCmd.Flags().Int("api-server-port", 0, "API server port (0 for default)")
+	clusterCreateCmd.Flags().String("cpu-limit", "", "CPU limit per node (e.g., '4', '2.5')")
+	clusterCreateCmd.Flags().String("memory-limit", "", "Memory limit per node (e.g., '8Gi', '4096Mi')")
 
 	clusterListCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
 	
 	clusterScaleCmd.Flags().IntP("nodes", "n", 1, "Number of nodes to scale to")
 	clusterScaleCmd.MarkFlagRequired("nodes")
+
+	clusterGenerateConfigCmd.Flags().StringP("output", "o", "", "Output file path (default: stdout)")
 }

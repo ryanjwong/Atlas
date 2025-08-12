@@ -52,12 +52,55 @@ func (l *LocalProvider) CreateCluster(ctx context.Context, config *ClusterConfig
 		args = append(args, "--nodes="+strconv.Itoa(config.NodeCount))
 	}
 
+	if config.NetworkConfig != nil {
+		if config.NetworkConfig.PodCIDR != "" {
+			args = append(args, "--extra-config", "kubeadm.pod-network-cidr="+config.NetworkConfig.PodCIDR)
+		}
+		if config.NetworkConfig.ServiceCIDR != "" {
+			args = append(args, "--service-cluster-ip-range", config.NetworkConfig.ServiceCIDR)
+		}
+		if config.NetworkConfig.APIServerPort > 0 {
+			args = append(args, "--apiserver-port", strconv.Itoa(config.NetworkConfig.APIServerPort))
+		}
+		if config.NetworkConfig.NetworkPlugin != "" && config.NetworkConfig.NetworkPlugin != "auto" {
+			args = append(args, "--cni", config.NetworkConfig.NetworkPlugin)
+		}
+	}
+
+	if config.SecurityConfig != nil {
+		if config.SecurityConfig.RBAC != nil && config.SecurityConfig.RBAC.Enabled {
+			args = append(args, "--extra-config", "apiserver.authorization-mode=RBAC")
+		}
+		if config.SecurityConfig.AuditLogging != nil && config.SecurityConfig.AuditLogging.Enabled {
+			args = append(args, "--extra-config", "apiserver.audit-log-path=/tmp/audit.log")
+			if config.SecurityConfig.AuditLogging.LogLevel != "" {
+				args = append(args, "--extra-config", "apiserver.v="+config.SecurityConfig.AuditLogging.LogLevel)
+			}
+		}
+	}
+
+	if config.ResourceConfig != nil {
+		if config.ResourceConfig.Limits != nil {
+			if config.ResourceConfig.Limits.CPU != "" {
+				args = append(args, "--cpus", config.ResourceConfig.Limits.CPU)
+			}
+			if config.ResourceConfig.Limits.Memory != "" {
+				args = append(args, "--memory", config.ResourceConfig.Limits.Memory)
+			}
+		}
+	}
+
 	cmd := exec.Command("minikube", args...)
 	fmt.Println("creating minikube cluster...")
 	_, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to start minikube: %s", err)
 	}
+
+	if err := l.applyPostCreateConfigs(ctx, config); err != nil {
+		fmt.Printf("warning: failed to apply some post-create configurations: %v\n", err)
+	}
+
 	fmt.Printf("successfully created cluster: %s\n", config.Name)
 	return l.GetCluster(ctx, config.Name)
 }
@@ -273,6 +316,322 @@ func (l *LocalProvider) ValidateConfig(config *ClusterConfig) error {
 		return fmt.Errorf("node count cannot exceed 10 for local provider")
 	}
 
+	if err := l.validateNetworkConfig(config.NetworkConfig); err != nil {
+		return fmt.Errorf("invalid network configuration: %w", err)
+	}
+
+	if err := l.validateSecurityConfig(config.SecurityConfig); err != nil {
+		return fmt.Errorf("invalid security configuration: %w", err)
+	}
+
+	if err := l.validateResourceConfig(config.ResourceConfig); err != nil {
+		return fmt.Errorf("invalid resource configuration: %w", err)
+	}
+
+	return nil
+}
+
+func (l *LocalProvider) validateNetworkConfig(netConfig *NetworkConfig) error {
+	if netConfig == nil {
+		return nil
+	}
+
+	if netConfig.APIServerPort > 0 && (netConfig.APIServerPort < 1024 || netConfig.APIServerPort > 65535) {
+		return fmt.Errorf("API server port must be between 1024 and 65535")
+	}
+
+	if netConfig.NetworkPlugin != "" {
+		validPlugins := []string{"bridge", "flannel", "calico", "auto"}
+		isValid := false
+		for _, plugin := range validPlugins {
+			if netConfig.NetworkPlugin == plugin {
+				isValid = true
+				break
+			}
+		}
+		if !isValid {
+			return fmt.Errorf("invalid network plugin: %s. Valid options: %v", netConfig.NetworkPlugin, validPlugins)
+		}
+	}
+
+	for _, portMap := range netConfig.ExtraPortMaps {
+		if portMap.HostPort <= 0 || portMap.ContainerPort <= 0 {
+			return fmt.Errorf("port mappings must have positive port numbers")
+		}
+		if portMap.Protocol != "" && portMap.Protocol != "tcp" && portMap.Protocol != "udp" {
+			return fmt.Errorf("invalid protocol: %s. Valid options: tcp, udp", portMap.Protocol)
+		}
+	}
+
+	if netConfig.Ingress != nil && netConfig.Ingress.Controller != "" {
+		validControllers := []string{"nginx", "traefik", "haproxy"}
+		isValid := false
+		for _, controller := range validControllers {
+			if netConfig.Ingress.Controller == controller {
+				isValid = true
+				break
+			}
+		}
+		if !isValid {
+			return fmt.Errorf("invalid ingress controller: %s. Valid options: %v", netConfig.Ingress.Controller, validControllers)
+		}
+	}
+
+	return nil
+}
+
+func (l *LocalProvider) validateSecurityConfig(secConfig *SecurityConfig) error {
+	if secConfig == nil {
+		return nil
+	}
+
+	if secConfig.AuthenticationMode != "" {
+		validModes := []string{"RBAC", "ABAC", "Node", "Webhook"}
+		isValid := false
+		for _, mode := range validModes {
+			if secConfig.AuthenticationMode == mode {
+				isValid = true
+				break
+			}
+		}
+		if !isValid {
+			return fmt.Errorf("invalid authentication mode: %s. Valid options: %v", secConfig.AuthenticationMode, validModes)
+		}
+	}
+
+	if secConfig.AuditLogging != nil && secConfig.AuditLogging.LogLevel != "" {
+		validLevels := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
+		isValid := false
+		for _, level := range validLevels {
+			if secConfig.AuditLogging.LogLevel == level {
+				isValid = true
+				break
+			}
+		}
+		if !isValid {
+			return fmt.Errorf("invalid audit log level: %s. Valid options: 1-10", secConfig.AuditLogging.LogLevel)
+		}
+	}
+
+	if secConfig.ImageSecurity != nil && secConfig.ImageSecurity.VulnerabilityThreshold != "" {
+		validThresholds := []string{"low", "medium", "high", "critical"}
+		isValid := false
+		for _, threshold := range validThresholds {
+			if secConfig.ImageSecurity.VulnerabilityThreshold == threshold {
+				isValid = true
+				break
+			}
+		}
+		if !isValid {
+			return fmt.Errorf("invalid vulnerability threshold: %s. Valid options: %v", secConfig.ImageSecurity.VulnerabilityThreshold, validThresholds)
+		}
+	}
+
+	return nil
+}
+
+func (l *LocalProvider) validateResourceConfig(resConfig *ResourceConfig) error {
+	if resConfig == nil {
+		return nil
+	}
+
+	if resConfig.AutoScaling != nil {
+		if resConfig.AutoScaling.MinNodes < 1 {
+			return fmt.Errorf("minimum nodes must be at least 1")
+		}
+		if resConfig.AutoScaling.MaxNodes > 10 {
+			return fmt.Errorf("maximum nodes cannot exceed 10 for local provider")
+		}
+		if resConfig.AutoScaling.MinNodes > resConfig.AutoScaling.MaxNodes {
+			return fmt.Errorf("minimum nodes cannot be greater than maximum nodes")
+		}
+		if resConfig.AutoScaling.TargetCPU > 0 && (resConfig.AutoScaling.TargetCPU < 10 || resConfig.AutoScaling.TargetCPU > 90) {
+			return fmt.Errorf("target CPU must be between 10 and 90 percent")
+		}
+	}
+
+	if resConfig.Storage != nil {
+		for _, sc := range resConfig.Storage.StorageClasses {
+			if sc.Name == "" || sc.Provisioner == "" {
+				return fmt.Errorf("storage class name and provisioner are required")
+			}
+			validProvisioners := []string{"hostpath", "local", "nfs"}
+			isValid := false
+			for _, provisioner := range validProvisioners {
+				if sc.Provisioner == provisioner {
+					isValid = true
+					break
+				}
+			}
+			if !isValid {
+				return fmt.Errorf("invalid storage provisioner: %s. Valid options for local provider: %v", sc.Provisioner, validProvisioners)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (l *LocalProvider) applyPostCreateConfigs(ctx context.Context, config *ClusterConfig) error {
+	if config.NetworkConfig != nil {
+		if err := l.applyNetworkConfig(ctx, config.Name, config.NetworkConfig); err != nil {
+			return fmt.Errorf("failed to apply network config: %w", err)
+		}
+	}
+
+	if config.SecurityConfig != nil {
+		if err := l.applySecurityConfig(ctx, config.Name, config.SecurityConfig); err != nil {
+			return fmt.Errorf("failed to apply security config: %w", err)
+		}
+	}
+
+	if config.ResourceConfig != nil {
+		if err := l.applyResourceConfig(ctx, config.Name, config.ResourceConfig); err != nil {
+			return fmt.Errorf("failed to apply resource config: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (l *LocalProvider) applyNetworkConfig(ctx context.Context, clusterName string, netConfig *NetworkConfig) error {
+	if netConfig.Ingress != nil && netConfig.Ingress.Enabled {
+		cmd := exec.Command("minikube", "addons", "enable", "ingress", "-p", clusterName)
+		if _, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to enable ingress addon: %w", err)
+		}
+		fmt.Printf("Enabled ingress controller for cluster %s\n", clusterName)
+	}
+
+	if netConfig.LoadBalancer != nil && netConfig.LoadBalancer.Enabled {
+		cmd := exec.Command("minikube", "addons", "enable", "metallb", "-p", clusterName)
+		if _, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to enable metallb addon: %w", err)
+		}
+		fmt.Printf("Enabled MetalLB load balancer for cluster %s\n", clusterName)
+	}
+
+	return nil
+}
+
+func (l *LocalProvider) applySecurityConfig(ctx context.Context, clusterName string, secConfig *SecurityConfig) error {
+	if secConfig.NetworkPolicy != nil && secConfig.NetworkPolicy.Enabled {
+		networkPolicyYAML := `
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: default
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+`
+		if err := l.applyKubernetesResource(clusterName, networkPolicyYAML); err != nil {
+			return fmt.Errorf("failed to apply network policy: %w", err)
+		}
+		fmt.Printf("Applied default network policy for cluster %s\n", clusterName)
+	}
+
+	if secConfig.PodSecurityPolicy != nil && secConfig.PodSecurityPolicy.Enabled {
+		pspYAML := `
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: restricted
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  seLinux:
+    rule: 'RunAsAny'
+  fsGroup:
+    rule: 'RunAsAny'
+`
+		if err := l.applyKubernetesResource(clusterName, pspYAML); err != nil {
+			return fmt.Errorf("failed to apply pod security policy: %w", err)
+		}
+		fmt.Printf("Applied pod security policy for cluster %s\n", clusterName)
+	}
+
+	return nil
+}
+
+func (l *LocalProvider) applyResourceConfig(ctx context.Context, clusterName string, resConfig *ResourceConfig) error {
+	if resConfig.Monitoring != nil && resConfig.Monitoring.Enabled {
+		if resConfig.Monitoring.Prometheus != nil && resConfig.Monitoring.Prometheus.Enabled {
+			cmd := exec.Command("minikube", "addons", "enable", "metrics-server", "-p", clusterName)
+			if _, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to enable metrics-server addon: %w", err)
+			}
+			fmt.Printf("Enabled metrics-server for cluster %s\n", clusterName)
+		}
+	}
+
+	if resConfig.Storage != nil {
+		if resConfig.Storage.DefaultStorageClass != "" {
+			cmd := exec.Command("minikube", "addons", "enable", "default-storageclass", "-p", clusterName)
+			if _, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to enable default storageclass: %w", err)
+			}
+			fmt.Printf("Enabled default storage class for cluster %s\n", clusterName)
+		}
+		if resConfig.Storage.VolumeExpansion {
+			cmd := exec.Command("minikube", "addons", "enable", "volumesnapshots", "-p", clusterName)
+			if _, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to enable volume snapshots: %w", err)
+			}
+			fmt.Printf("Enabled volume snapshots for cluster %s\n", clusterName)
+		}
+	}
+
+	if resConfig.Quotas != nil && resConfig.Quotas.DefaultQuota != nil {
+		quotaYAML := fmt.Sprintf(`
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: default-quota
+  namespace: default
+spec:
+  hard:
+    requests.cpu: "%s"
+    requests.memory: "%s"
+    requests.storage: "%s"
+    persistentvolumeclaims: "%d"
+    pods: "%d"
+`, 
+			resConfig.Quotas.DefaultQuota.CPU,
+			resConfig.Quotas.DefaultQuota.Memory,
+			resConfig.Quotas.DefaultQuota.Storage,
+			resConfig.Quotas.DefaultQuota.PVCs,
+			resConfig.Quotas.DefaultQuota.Pods)
+
+		if err := l.applyKubernetesResource(clusterName, quotaYAML); err != nil {
+			return fmt.Errorf("failed to apply resource quota: %w", err)
+		}
+		fmt.Printf("Applied default resource quota for cluster %s\n", clusterName)
+	}
+
+	return nil
+}
+
+func (l *LocalProvider) applyKubernetesResource(clusterName, resourceYAML string) error {
+	cmd := exec.Command("minikube", "kubectl", "-p", clusterName, "--", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(resourceYAML)
+	if _, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to apply kubernetes resource: %w", err)
+	}
 	return nil
 }
 
