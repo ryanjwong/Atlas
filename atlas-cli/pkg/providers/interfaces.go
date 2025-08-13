@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/logsource"
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/monitoring"
 )
 
 // Provider defines the interface for providers
@@ -28,6 +29,10 @@ type Provider interface {
 
 	// Log source for operation history and cluster information
 	GetLogSource() logsource.LogSource
+	
+	// Monitoring for health checks and metrics collection
+	GetMonitor() monitoring.Monitor
+	HealthCheck(ctx context.Context, clusterName string) (*monitoring.HealthStatus, error)
 }
 
 // ClusterConfig represents cluster configuration

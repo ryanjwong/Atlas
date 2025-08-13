@@ -10,17 +10,20 @@ import (
 	"time"
 
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/logsource"
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/monitoring"
 )
 
 // LocalProvider implements Provider for local minikube clusters
 type LocalProvider struct {
 	logSource logsource.LogSource
+	monitor   monitoring.Monitor
 }
 
 // NewLocalProvider creates a new local provider
 func NewLocalProvider() *LocalProvider {
 	return &LocalProvider{
 		logSource: logsource.NewMinikubeLogSource(),
+		monitor:   monitoring.NewMinikubeMonitor(),
 	}
 }
 
@@ -593,6 +596,16 @@ func (l *LocalProvider) validateResourceConfig(resConfig *ResourceConfig) error 
 	}
 
 	return nil
+}
+
+// GetMonitor returns the monitor for health checks and metrics collection
+func (l *LocalProvider) GetMonitor() monitoring.Monitor {
+	return l.monitor
+}
+
+// HealthCheck performs a health check on the specified cluster
+func (l *LocalProvider) HealthCheck(ctx context.Context, clusterName string) (*monitoring.HealthStatus, error) {
+	return l.monitor.CheckClusterHealth(ctx, clusterName)
 }
 
 // Ensure LocalProvider implements Provider interface

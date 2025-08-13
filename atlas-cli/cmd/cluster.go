@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/logsource"
+	"github.com/ryanjwong/Atlas/atlas-cli/pkg/monitoring"
 	"github.com/ryanjwong/Atlas/atlas-cli/pkg/providers"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -453,6 +456,28 @@ var clusterHistoryCmd = &cobra.Command{
 	},
 }
 
+var clusterWatchCmd = &cobra.Command{
+	Use:   "watch [name]",
+	Short: "Watch cluster health in real-time",
+	Long:  `Monitor cluster health and resource usage in real-time with automatic updates.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		services := GetServices()
+		if services == nil {
+			return fmt.Errorf("services not initialized")
+		}
+
+		clusterName := args[0]
+		provider := services.GetLocalProvider()
+		monitor := provider.GetMonitor()
+		
+		includeMetrics, _ := cmd.Flags().GetBool("metrics")
+		interval, _ := cmd.Flags().GetInt("interval")
+		
+		return watchCluster(monitor, clusterName, includeMetrics, interval)
+	},
+}
+
 func loadClusterConfig(configFile string) (*providers.ClusterConfig, error) {
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -465,6 +490,162 @@ func loadClusterConfig(configFile string) (*providers.ClusterConfig, error) {
 	}
 
 	return &config, nil
+}
+
+func watchCluster(monitor monitoring.Monitor, clusterName string, includeMetrics bool, intervalSecs int) error {
+	fmt.Printf("Watching cluster '%s' (Press Ctrl+C to exit)\n\n", clusterName)
+	
+	interval := time.Duration(intervalSecs) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	ctx := context.Background()
+
+	for {
+		healthStatus, err := monitor.CheckClusterHealth(ctx, clusterName)
+		if err != nil {
+			fmt.Printf("Health check failed: %v\n", err)
+			time.Sleep(interval)
+			continue
+		}
+
+		fmt.Print("\033[2J\033[H")
+		
+		fmt.Printf("=== Cluster Monitor: %s ===\n", clusterName)
+		fmt.Printf("Last updated: %s\n\n", time.Now().Format("15:04:05"))
+		
+		printClusterHealthStatus(healthStatus)
+		
+		if includeMetrics {
+			fmt.Println()
+			metrics, err := monitor.GetClusterMetrics(ctx, clusterName)
+			if err != nil {
+				fmt.Printf("Metrics collection failed: %v\n", err)
+			} else {
+				printClusterMetrics(metrics)
+			}
+		}
+		
+		fmt.Println("\n" + strings.Repeat("=", 50))
+		
+		select {
+		case <-ticker.C:
+			continue
+		}
+	}
+}
+
+func printClusterHealthStatus(health *monitoring.HealthStatus) {
+	fmt.Printf("Overall Status: %s\n", getStatusDisplayIcon(string(health.OverallStatus)))
+	fmt.Printf("Check Duration: %v\n", health.CheckDuration)
+	
+	if health.ControlPlane != nil {
+		fmt.Println("\n--- Control Plane ---")
+		fmt.Printf("API Server:          %s\n", getComponentStatusDisplayIcon(health.ControlPlane.APIServer.Status))
+		fmt.Printf("Scheduler:           %s\n", getComponentStatusDisplayIcon(health.ControlPlane.Scheduler.Status))
+		fmt.Printf("Controller Manager:  %s\n", getComponentStatusDisplayIcon(health.ControlPlane.ControllerManager.Status))
+		fmt.Printf("Etcd:               %s\n", getComponentStatusDisplayIcon(health.ControlPlane.Etcd.Status))
+	}
+	
+	if len(health.Nodes) > 0 {
+		fmt.Println("\n--- Nodes ---")
+		for _, node := range health.Nodes {
+			readyIcon := "❌"
+			if node.Ready {
+				readyIcon = "✅"
+			}
+			fmt.Printf("%s %s (%s)\n", readyIcon, node.Name, node.Version)
+		}
+	}
+	
+	if health.Pods != nil {
+		fmt.Println("\n--- Pods ---")
+		fmt.Printf("Total: %d | Running: %d | Pending: %d | Failed: %d\n",
+			health.Pods.TotalPods, health.Pods.RunningPods, health.Pods.PendingPods, health.Pods.FailedPods)
+		
+		if len(health.Pods.CriticalPods) > 0 {
+			fmt.Println("Critical Pods:")
+			for _, pod := range health.Pods.CriticalPods {
+				fmt.Printf("  ⚠️  %s/%s (%s)\n", pod.Namespace, pod.Name, pod.Phase)
+			}
+		}
+	}
+	
+	if health.Services != nil {
+		fmt.Printf("\n--- Services ---\n")
+		fmt.Printf("Total: %d | Healthy: %d\n", health.Services.TotalServices, health.Services.HealthyServices)
+	}
+	
+	if len(health.Warnings) > 0 {
+		fmt.Println("\n--- Warnings ---")
+		for _, warning := range health.Warnings {
+			fmt.Printf("⚠️  %s\n", warning)
+		}
+	}
+	
+	if len(health.Errors) > 0 {
+		fmt.Println("\n--- Errors ---")
+		for _, error := range health.Errors {
+			fmt.Printf("❌ %s\n", error)
+		}
+	}
+}
+
+func printClusterMetrics(metrics *monitoring.ClusterMetrics) {
+	fmt.Println("--- Resource Metrics ---")
+	
+	if len(metrics.NodeMetrics) > 0 {
+		fmt.Println("Node Metrics:")
+		for _, node := range metrics.NodeMetrics {
+			fmt.Printf("  %s: CPU %s (%.1f%%) | Memory %s (%.1f%%)\n",
+				node.NodeName, node.CPUUsage.Value, node.CPUUsage.Usage,
+				node.MemoryUsage.Value, node.MemoryUsage.Usage)
+		}
+	}
+	
+	if metrics.ResourceUsage != nil {
+		fmt.Printf("\nCluster Totals:\n")
+		fmt.Printf("  CPU Usage: %.1f%%\n", metrics.ResourceUsage.CPUPercentage)
+		fmt.Printf("  Memory Usage: %.1f%%\n", metrics.ResourceUsage.MemoryPercentage)
+	}
+	
+	if len(metrics.PodMetrics) > 0 {
+		fmt.Printf("\nTop Resource-Consuming Pods:\n")
+		maxDisplay := 5
+		if len(metrics.PodMetrics) < maxDisplay {
+			maxDisplay = len(metrics.PodMetrics)
+		}
+		
+		for i := 0; i < maxDisplay; i++ {
+			pod := metrics.PodMetrics[i]
+			fmt.Printf("  %s/%s: CPU %s | Memory %s\n",
+				pod.Namespace, pod.PodName, pod.CPUUsage.Value, pod.MemoryUsage.Value)
+		}
+	}
+}
+
+func getStatusDisplayIcon(status string) string {
+	switch status {
+	case "healthy":
+		return "✅ Healthy"
+	case "warning":
+		return "⚠️  Warning"
+	case "unhealthy":
+		return "❌ Unhealthy"
+	default:
+		return "❓ Unknown"
+	}
+}
+
+func getComponentStatusDisplayIcon(status monitoring.ComponentHealthStatus) string {
+	switch status {
+	case monitoring.ComponentHealthy:
+		return "✅ Healthy"
+	case monitoring.ComponentUnhealthy:
+		return "❌ Unhealthy"
+	default:
+		return "❓ Unknown"
+	}
 }
 
 var clusterGenerateConfigCmd = &cobra.Command{
@@ -619,6 +800,7 @@ func init() {
 	clusterCmd.AddCommand(clusterGenerateConfigCmd)
 	clusterCmd.AddCommand(clusterStatusCmd)
 	clusterCmd.AddCommand(clusterHistoryCmd)
+	clusterCmd.AddCommand(clusterWatchCmd)
 
 	clusterCreateCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
 	clusterCreateCmd.Flags().StringP("region", "r", "local", "Region to create cluster in")
@@ -644,4 +826,7 @@ func init() {
 	clusterGenerateConfigCmd.Flags().StringP("output", "o", "", "Output file path (default: stdout)")
 
 	clusterHistoryCmd.Flags().IntP("limit", "l", 50, "Number of operations to display")
+	
+	clusterWatchCmd.Flags().BoolP("metrics", "m", false, "Include detailed resource metrics")
+	clusterWatchCmd.Flags().IntP("interval", "i", 5, "Update interval in seconds")
 }

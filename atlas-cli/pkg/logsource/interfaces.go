@@ -13,12 +13,6 @@ type LogSource interface {
 	// Get operation history for all clusters  
 	GetAllClustersHistory(ctx context.Context, limit int) (map[string][]*OperationHistory, error)
 	
-	// List all clusters known to this log source
-	ListClusters(ctx context.Context) ([]*ClusterInfo, error)
-	
-	// Get current status of a specific cluster
-	GetClusterStatus(ctx context.Context, clusterName string) (*ClusterStatus, error)
-	
 	// Get the source name for identification
 	GetSourceName() string
 }
