@@ -22,7 +22,18 @@ var monitorCmd = &cobra.Command{
 			return fmt.Errorf("services not initialized")
 		}
 
-		provider := services.GetLocalProvider()
+		providerName, _ := cmd.Flags().GetString("provider")
+		region, _ := cmd.Flags().GetString("region") 
+		awsProfile, _ := cmd.Flags().GetString("aws-profile")
+		
+		if providerName == "" {
+			providerName = "local"
+		}
+		
+		provider, err := services.GetProvider(providerName, region, awsProfile)
+		if err != nil {
+			return fmt.Errorf("failed to get provider: %w", err)
+		}
 		monitor := provider.GetMonitor()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -245,4 +256,7 @@ func init() {
 	
 	monitorCmd.Flags().BoolP("metrics", "m", false, "Include detailed resource metrics")
 	monitorCmd.Flags().BoolP("watch", "w", false, "Watch mode - continuously monitor cluster")
+	monitorCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws)")
+	monitorCmd.Flags().StringP("region", "r", "", "Region")
+	monitorCmd.Flags().String("aws-profile", "", "AWS profile to use (for AWS provider)")
 }

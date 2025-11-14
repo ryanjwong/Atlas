@@ -108,20 +108,19 @@ var clusterCreateCmd = &cobra.Command{
 			}
 		}
 
-		provider, _ := cmd.Flags().GetString("provider")
-		var p providers.Provider
-		switch provider {
-		case "local":
-			p = services.GetLocalProvider()
-		default:
-			return fmt.Errorf("unsupported provider: %s", provider)
+		providerName, _ := cmd.Flags().GetString("provider")
+		awsProfile, _ := cmd.Flags().GetString("aws-profile")
+		
+		p, err := services.GetProvider(providerName, config.Region, awsProfile)
+		if err != nil {
+			return fmt.Errorf("failed to create provider: %w", err)
 		}
 
 		if err := p.ValidateConfig(config); err != nil {
 			return fmt.Errorf("configuration validation failed: %w", err)
 		}
 
-		_, err := p.CreateCluster(context.Background(), config)
+		_, err = p.CreateCluster(context.Background(), config)
 		if err != nil {
 			return fmt.Errorf("failed to create cluster: %w", err)
 		}
@@ -141,14 +140,15 @@ var clusterListCmd = &cobra.Command{
 		}
 
 		services.Log("Listing clusters")
-		provider, _ := cmd.Flags().GetString("provider")
-		var p providers.Provider
-		switch provider {
-		case "local":
-			p = services.GetLocalProvider()
-		default:
-			return fmt.Errorf("unsupported provider: %s", provider)
+		providerName, _ := cmd.Flags().GetString("provider")
+		awsProfile, _ := cmd.Flags().GetString("aws-profile")
+		region, _ := cmd.Flags().GetString("region")
+		
+		p, err := services.GetProvider(providerName, region, awsProfile)
+		if err != nil {
+			return fmt.Errorf("failed to create provider: %w", err)
 		}
+		
 		clusters, err := p.ListClusters(context.Background())
 
 		if err != nil {
@@ -198,8 +198,13 @@ var clusterDeleteCmd = &cobra.Command{
 		clusterName := args[0]
 		services.Log(fmt.Sprintf("Deleting cluster: %s", clusterName))
 
-		p := services.GetLocalProvider()
-		err := p.DeleteCluster(context.Background(), clusterName)
+		var p providers.Provider
+		var err error
+		p, err = services.GetProvider("local", "local", "")
+		if err != nil {
+			return fmt.Errorf("failed to get provider: %w", err)
+		}
+		err = p.DeleteCluster(context.Background(), clusterName)
 		if err != nil {
 			return fmt.Errorf("failed to delete cluster: %w", err)
 		}
@@ -239,8 +244,13 @@ var clusterStartCmd = &cobra.Command{
 		clusterName := args[0]
 		services.Log(fmt.Sprintf("Starting cluster: %s", clusterName))
 
-		p := services.GetLocalProvider()
-		err := p.StartCluster(context.Background(), clusterName)
+		var p providers.Provider
+		var err error
+		p, err = services.GetProvider("local", "local", "")
+		if err != nil {
+			return fmt.Errorf("failed to get provider: %w", err)
+		}
+		err = p.StartCluster(context.Background(), clusterName)
 		if err != nil {
 			return fmt.Errorf("failed to start cluster: %w", err)
 		}
@@ -280,8 +290,13 @@ var clusterStopCmd = &cobra.Command{
 		clusterName := args[0]
 		services.Log(fmt.Sprintf("Stopping cluster: %s", clusterName))
 
-		p := services.GetLocalProvider()
-		err := p.StopCluster(context.Background(), clusterName)
+		var p providers.Provider
+		var err error
+		p, err = services.GetProvider("local", "local", "")
+		if err != nil {
+			return fmt.Errorf("failed to get provider: %w", err)
+		}
+		err = p.StopCluster(context.Background(), clusterName)
 		if err != nil {
 			return fmt.Errorf("failed to stop cluster: %w", err)
 		}
@@ -323,8 +338,13 @@ var clusterScaleCmd = &cobra.Command{
 
 		services.Log(fmt.Sprintf("Scaling cluster: %s to %d nodes", clusterName, nodeCount))
 
-		p := services.GetLocalProvider()
-		err := p.ScaleCluster(context.Background(), clusterName, nodeCount)
+		var p providers.Provider
+		var err error
+		p, err = services.GetProvider("local", "local", "")
+		if err != nil {
+			return fmt.Errorf("failed to get provider: %w", err)
+		}
+		err = p.ScaleCluster(context.Background(), clusterName, nodeCount)
 		if err != nil {
 			return fmt.Errorf("failed to scale cluster: %w", err)
 		}
@@ -363,7 +383,12 @@ var clusterStatusCmd = &cobra.Command{
 		}
 
 		clusterName := args[0]
-		p := services.GetLocalProvider()
+		var p providers.Provider
+		var err error
+		p, err = services.GetProvider("local", "local", "")
+		if err != nil {
+			return fmt.Errorf("failed to get provider: %w", err)
+		}
 		actualCluster, err := p.GetCluster(context.Background(), clusterName)
 		if err != nil {
 			return fmt.Errorf("failed to get cluster status: %w", err)
@@ -803,11 +828,12 @@ func init() {
 	clusterCmd.AddCommand(clusterWatchCmd)
 
 	clusterCreateCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
-	clusterCreateCmd.Flags().StringP("region", "r", "local", "Region to create cluster in")
+	clusterCreateCmd.Flags().StringP("region", "r", "", "Region to create cluster in")
 	clusterCreateCmd.Flags().IntP("nodes", "n", 1, "Number of nodes in the cluster")
 	clusterCreateCmd.Flags().StringP("version", "k", "", "Kubernetes version")
 	clusterCreateCmd.Flags().String("instance-type", "", "Instance type for nodes")
 	clusterCreateCmd.Flags().StringP("config", "c", "", "Path to cluster configuration YAML file")
+	clusterCreateCmd.Flags().String("aws-profile", "", "AWS profile to use (for AWS provider)")
 
 	clusterCreateCmd.Flags().Bool("enable-ingress", false, "Enable ingress controller")
 	clusterCreateCmd.Flags().Bool("enable-load-balancer", false, "Enable load balancer")
@@ -819,6 +845,8 @@ func init() {
 	clusterCreateCmd.Flags().String("memory-limit", "", "Memory limit per node (e.g., '8Gi', '4096Mi')")
 
 	clusterListCmd.Flags().StringP("provider", "p", "local", "Cloud provider (local, aws, gcp, azure)")
+	clusterListCmd.Flags().StringP("region", "r", "", "Region to list clusters from") 
+	clusterListCmd.Flags().String("aws-profile", "", "AWS profile to use (for AWS provider)")
 
 	clusterScaleCmd.Flags().IntP("nodes", "n", 1, "Number of nodes to scale to")
 	clusterScaleCmd.MarkFlagRequired("nodes")
